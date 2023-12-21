@@ -2,12 +2,14 @@ add_rules("mode.debug", "mode.release")
 
 set_languages("c99")
 
-target("NanoComplier")
+-- NanoComplier
+target("ncc")
     set_kind("binary")
     add_includedirs("Complier/Inc")
     add_files("Complier/Src/**.c")
 
-target("NanoVM")
+-- NanoVM
+target("nvm")
     set_kind("binary")
     add_includedirs("Complier/Inc")
     add_files("VirtualMachine/Src/**.c")
