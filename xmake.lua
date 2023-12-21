@@ -5,14 +5,14 @@ set_languages("c99")
 -- NanoComplier
 target("ncc")
     set_kind("binary")
-    add_includedirs("Complier/Inc")
-    add_files("Complier/Src/**.c")
+    add_includedirs("ncc/inc")
+    add_files("ncc/src/**.c")
 
 -- NanoVM
 target("nvm")
     set_kind("binary")
-    add_includedirs("Complier/Inc")
-    add_files("VirtualMachine/Src/**.c")
+    add_includedirs("nvm/inc")
+    add_files("nvm/src/**.c")
 
 --
 -- If you want to known more usage about xmake, please see https://xmake.io
