@@ -3,14 +3,14 @@
 
 enum Instructions {
     /* 保存和加载的指令 */
-    Instructions_IMM, /* load Immediate */
-    Instructions_LEA,
-    Instructions_LC,
-    Instructions_LI,
-    Instructions_SC,
-    Instructions_SI,
-    Instructions_PUSH,
-    Instructions_POP,
+    Instructions_IMM,  /* Load Immediate */
+    Instructions_LEA,  /* Load Effective Address */
+    Instructions_LC,   /* Load Int */
+    Instructions_LI,   /* Load Char */
+    Instructions_SI,   /* Save Int */
+    Instructions_SC,   /* Save Char */
+    Instructions_PUSH, /* Push 将寄存器数据压到栈顶 */
+    Instructions_POP,  /* Pop 弹出栈顶 */
     /* 运算 */
     Instructions_ADD,
     Instructions_SUB,
@@ -18,16 +18,16 @@ enum Instructions {
     Instructions_DIV,
     Instructions_MOD,
     Instructions_OR,
-    Instructions_XOR,
-    Instructions_AND,
-    Instructions_SHL,
-    Instructions_SHR,
-    Instructions_EQ,
-    Instructions_NE,
-    Instructions_LT,
-    Instructions_LE,
-    Instructions_GT,
-    Instructions_GE,
+    Instructions_XOR, /* Xor 按位异或 */
+    Instructions_AND, /* And 逻辑与 */
+    Instructions_SHL, /* Shift Logical Left 逻辑左移 */
+    Instructions_SHR, /* Shift Logical Right 逻辑右移 */
+    Instructions_EQ,  /* Equal 相等 */
+    Instructions_NE,  /* Not Equal 不相等 */
+    Instructions_LT,  /* Less Than 小于*/
+    Instructions_LE,  /* Less Equal 小于等于*/
+    Instructions_GT,  /* Greater Than 大于*/
+    Instructions_GE,  /* Greater Equal 大于等于*/
     /* 分支跳转 */
     Instructions_JMP,
     Instructions_JE,
