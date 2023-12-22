@@ -1,7 +1,8 @@
+#include <core.h>
+#include <instructions.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
-#include <instructions.h>
 
 void
 help_handler()
@@ -9,16 +10,14 @@ help_handler()
     printf("Usage: nvm <input file> [options]\n");
     printf("Example: nvm test.nca\n");
     // 现在暂时没有Option
-    //printf("Option: \n");
+    // printf("Option: \n");
 }
 
-
-void run_file_handler(char* files)
+void
+run_file_handler(char * files)
 {
     // 输出文件内容，用于测试是否正确读入
     printf("%s\n", files);
-
-
 }
 
 int
@@ -33,34 +32,20 @@ main(int argc, char * argv[])
     }
     else if (argc == 2) {
         // 单独运行一个nca文件的情况
-        FILE* pf = fopen(argv[1], "rb");
-        if(pf == NULL) {
-            printf("Error: Cannot open file %s\n", argv[1]);
-            exit(EXIT_FAILURE);
-        }
-        // 计算文件大小
-        fseek(pf,0,SEEK_END);
-        int64_t file_size = ftell(pf);
-        // 申请内存
-        char* files = (char*)malloc(file_size);
-        if(files == NULL) {
-            printf("Error: Cannot allocate memory for file %s\n", argv[1]);
-            exit(EXIT_FAILURE);
-        }
-
-        // 将文件内容全部读入
-        fseek(pf,0,SEEK_SET);
-        fread(files, sizeof(char), file_size, pf);
-        fclose(pf);
-
-        // 运行一个文件
-        run_file_handler(files);
-
+        struct Nvm vm;
+        // 初始化虚拟机
+        Nvm_init(&vm, 1024 * 1024);// 默认1MB的栈大小
+        // 装载汇编文件
+        Nvm_load_file(&vm, argv[1]);
+        // printf("Vm in main: %X\n", &vm);
+        // 运行虚拟机
+        Nvm_run(&vm);
+        // 打印调试信息
+        Nvm_print_info(&vm);
         // 运行完，清理内存
-        free(files);
+        Nvm_destroy(&vm);
     }
     else {
-        
     }
     return EXIT_SUCCESS;
 }
