@@ -53,3 +53,5 @@ dkms.conf
 
 .xmake/
 build/
+.cache/
+compile_commands.json

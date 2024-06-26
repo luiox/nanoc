@@ -112,10 +112,10 @@ Nvm_print_info(struct Nvm * vm)
     // printf("Vm in Nvm_print_info: %X\n", vm);
     printf("Nvm current infomation:\n");
     printf("stack_size: %ld bytes\n", vm->stack_size);
-    printf("bp: %ld\n", vm->bp);
-    printf("pc: %ld\n", vm->pc);
-    printf("ax: %ld\n", vm->ax);
-    printf("sp: %ld\n", vm->sp);
+    printf("bp: %d\n", vm->bp);
+    printf("pc: %d\n", vm->pc);
+    printf("ax: %d\n", vm->ax);
+    printf("sp: %d\n", vm->sp);
 }
 
 void

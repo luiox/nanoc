@@ -1,18 +1,19 @@
 add_rules("mode.debug", "mode.release")
+add_rules("plugin.compile_commands.autoupdate", {outputdir = "."})
 
 set_languages("c99")
 
 -- NanoComplier
 target("ncc")
     set_kind("binary")
-    add_includedirs("ncc/inc")
-    add_files("ncc/src/**.c")
+    add_includedirs("ncc")
+    add_files("ncc/**.c")
 
 -- NanoVM
 target("nvm")
     set_kind("binary")
-    add_includedirs("nvm/inc")
-    add_files("nvm/src/**.c")
+    add_includedirs("nvm")
+    add_files("nvm/**.c")
 
 --
 -- If you want to known more usage about xmake, please see https://xmake.io
