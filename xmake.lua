@@ -14,7 +14,14 @@ target("ncc")
 target("nvm")
     set_kind("binary")
     add_includedirs("nvm")
-    add_files("nvm/**.c")
+    add_files("nvm/**.cpp")
+
+-- NanoAssembler
+target("nas")
+    set_kind("binary")
+    add_includedirs("nas")
+    add_includedirs("nvm")
+    add_files("nas/**.cpp")
 
 --
 -- If you want to known more usage about xmake, please see https://xmake.io

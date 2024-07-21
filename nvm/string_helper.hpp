@@ -3,9 +3,20 @@
 
 #include <string.h>
 #include <ctype.h>
+#include <string>
 
 static void
-nvm_trim(char * str)
+trim(std::string& str)
+{
+    // 去除字符串开头的空格和制表符
+    str.erase(0, str.find_first_not_of(" \t"));
+
+    // 去除字符串结尾的空格和制表符
+    str.erase(str.find_last_not_of(" \t") + 1);
+}
+
+static void
+trim(char * str)
 {
     int start = 0;
     int end = strlen(str) - 1;
@@ -29,7 +40,7 @@ nvm_trim(char * str)
 }
 
 static int
-nvm_stricmp(const char * s1, const char * s2)
+stricmp(const char * s1, const char * s2)
 {
     for (; *s1 && *s2; s1++, s2++) {
         if (tolower(*s1) != tolower(*s2)) {
@@ -40,7 +51,7 @@ nvm_stricmp(const char * s1, const char * s2)
 }
 
 static int
-nvm_strnicmp(const char * s1, const char * s2, size_t n)
+strnicmp(const char * s1, const char * s2, size_t n)
 {
     for (size_t i = 0; (i < n) && *s1 && *s2; s1++, s2++, i++) {
         if (tolower(*s1) != tolower(*s2)) {
