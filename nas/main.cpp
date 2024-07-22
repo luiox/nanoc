@@ -29,19 +29,30 @@ main()
         lineNumber++;
         std::cout << "Line [" << lineNumber << "] : " << line
                   << std::endl; // 输出读取的行
-        trim(line);
-        // 正则表达式匹配
-        std::string pattern = "^[a-zA-Z]+";
-        smatch match;
-        std::regex_search(line, match, std::regex(pattern));
 
-        // 检查是否找到匹配
-        if (match.empty()) {
-            std::cerr << "empty line" << std::endl;
-            // return 1;
-            continue;
+        // 去除头尾的制表符和空格
+        trim(line);
+        if (line.empty())
+            continue; // 如果是空行则忽略
+        if (line[0] == ';')
+            continue; // 如果是注释行，也忽略
+
+        // 去除注释
+        // 查找出字符串中分号的位置，如果有分号，则取开始到分号前为新的字符串
+        auto semicolonPos = line.find(';');
+        if (semicolonPos != string::npos) {
+            line = line.substr(0, semicolonPos);
         }
-        std::string opcode = match[0];
+
+        // 找出指令的范围
+        size_t i;
+        for (i = 0; i < line.size(); ++i) {
+            if (!isalpha(line[i])) {
+                break;
+            }
+        }
+        
+        std::string opcode = line.substr(0,i);
         // 调用生成器来从字符串构造对应的对象
         auto instruct = g_opcodeToGeneratorMap[opcode](line);
         if (instruct == nullptr) {

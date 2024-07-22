@@ -22,6 +22,7 @@ target("nas")
     add_includedirs("nas")
     add_includedirs("nvm")
     add_files("nas/**.cpp")
+    add_files("nvm/instructions.cpp")
 
 --
 -- If you want to known more usage about xmake, please see https://xmake.io

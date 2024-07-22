@@ -66,8 +66,8 @@ NInstructionsLMM::generateInstructionName()
     return "lmm";
 }
 
-NInstructionsLMM::NInstructionsInterface *
-parserInstructionText(std::string & text)
+NInstructionsInterface *
+NInstructionsLMM::parserInstructionText(std::string & text)
 {
     if (text.empty()) {
         return nullptr;
@@ -102,6 +102,31 @@ parserInstructionText(std::string & text)
     return nullptr;
 }
 
+NInstructionsInterface *
+NInstructionsST::parserInstructionText(std::string & text)
+{
+
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsLEA::parserInstructionText(std::string & text)
+{
+
+    return nullptr;
+}
+NInstructionsInterface *
+NInstructionsADD::parserInstructionText(std::string & text)
+{
+
+    return nullptr;
+}
+NInstructionsInterface *
+NInstructionsSUB::parserInstructionText(std::string & text)
+{
+
+    return nullptr;
+}
 
 // void
 // instruct_none_handler(struct Nvm * vm, char * instruct, char * buffer)
