@@ -27,7 +27,7 @@ void Parser::advance() {
 }
 
 bool Parser::match(TokenType type) {
-    if (currentToken().type == type) {
+    if (currentToken().tokenType == type) {
         advance();
         return true;
     }
@@ -35,12 +35,12 @@ bool Parser::match(TokenType type) {
 }
 
 bool Parser::expect(TokenType type) {
-    if (currentToken().type == type) {
+    if (currentToken().tokenType == type) {
         advance();
         return true;
     }
     error("Expected token type " + std::to_string(static_cast<int>(type)) + 
-          " but got " + std::to_string(static_cast<int>(currentToken().type)));
+          " but got " + std::to_string(static_cast<int>(currentToken().tokenType)));
     return false;
 }
 
@@ -55,7 +55,7 @@ void Parser::error(const std::string& message) {
 std::unique_ptr<Program> Parser::parse() {
     auto program = std::make_unique<Program>(currentToken().line, currentToken().column);
     
-    while (currentToken().type != TokenType::TOKEN_EOF) {
+    while (currentToken().tokenType != TokenType::TOKEN_EOF) {
         auto decl = parseDeclaration();
         if (decl) {
             program->declarations.push_back(std::move(decl));
@@ -67,9 +67,9 @@ std::unique_ptr<Program> Parser::parse() {
 
 std::unique_ptr<Decl> Parser::parseDeclaration() {
     // 检查是否是类型关键字
-    if (currentToken().type == TokenType::KEYWORD_INT || 
-        currentToken().type == TokenType::KEYWORD_CHAR ||
-        currentToken().type == TokenType::KEYWORD_VOID) {
+    if (currentToken().tokenType == TokenType::KEYWORD_INT || 
+        currentToken().tokenType == TokenType::KEYWORD_CHAR ||
+        currentToken().tokenType == TokenType::KEYWORD_VOID) {
         
         // 保存当前位置
         size_t startPos = m_pos;
@@ -79,14 +79,14 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         advance();
         
         // 获取名称
-        if (currentToken().type != TokenType::IDENTIFIER) {
+        if (currentToken().tokenType != TokenType::IDENTIFIER) {
             error("Expected identifier after type");
         }
         std::string name = currentToken().value;
         advance();
         
         // 检查是函数声明还是变量声明
-        if (currentToken().type == TokenType::DELIMITER_LPAREN) {
+        if (currentToken().tokenType == TokenType::DELIMITER_LPAREN) {
             // 函数声明
             m_pos = startPos; // 回退
             return parseFuncDeclaration();
@@ -103,9 +103,9 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
 
 std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
     // 获取类型
-    if (currentToken().type != TokenType::KEYWORD_INT && 
-        currentToken().type != TokenType::KEYWORD_CHAR &&
-        currentToken().type != TokenType::KEYWORD_VOID) {
+    if (currentToken().tokenType != TokenType::KEYWORD_INT && 
+        currentToken().tokenType != TokenType::KEYWORD_CHAR &&
+        currentToken().tokenType != TokenType::KEYWORD_VOID) {
         error("Expected type keyword");
     }
     
@@ -115,7 +115,7 @@ std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
     advance();
     
     // 获取名称
-    if (currentToken().type != TokenType::IDENTIFIER) {
+    if (currentToken().tokenType != TokenType::IDENTIFIER) {
         error("Expected identifier");
     }
     
@@ -125,7 +125,7 @@ std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
     auto varDecl = std::make_unique<VarDeclaration>(type, name, line, column);
     
     // 检查是否有初始化
-    if (currentToken().type == TokenType::OPERATOR_ASSIGN) {
+    if (currentToken().tokenType == TokenType::OPERATOR_ASSIGN) {
         advance();
         varDecl->initializer = parseExpression();
     }
@@ -138,9 +138,9 @@ std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
 
 std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     // 获取返回类型
-    if (currentToken().type != TokenType::KEYWORD_INT && 
-        currentToken().type != TokenType::KEYWORD_CHAR &&
-        currentToken().type != TokenType::KEYWORD_VOID) {
+    if (currentToken().tokenType != TokenType::KEYWORD_INT && 
+        currentToken().tokenType != TokenType::KEYWORD_CHAR &&
+        currentToken().tokenType != TokenType::KEYWORD_VOID) {
         error("Expected return type");
     }
     
@@ -150,7 +150,7 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     advance();
     
     // 获取函数名
-    if (currentToken().type != TokenType::IDENTIFIER) {
+    if (currentToken().tokenType != TokenType::IDENTIFIER) {
         error("Expected function name");
     }
     
@@ -162,19 +162,19 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     // 解析参数列表
     expect(TokenType::DELIMITER_LPAREN);
     
-    if (currentToken().type != TokenType::DELIMITER_RPAREN) {
+    if (currentToken().tokenType != TokenType::DELIMITER_RPAREN) {
         do {
             // 解析参数
-            if (currentToken().type != TokenType::KEYWORD_INT && 
-                currentToken().type != TokenType::KEYWORD_CHAR &&
-                currentToken().type != TokenType::KEYWORD_VOID) {
+            if (currentToken().tokenType != TokenType::KEYWORD_INT && 
+                currentToken().tokenType != TokenType::KEYWORD_CHAR &&
+                currentToken().tokenType != TokenType::KEYWORD_VOID) {
                 error("Expected parameter type");
             }
             
             std::string paramType = currentToken().value;
             advance();
             
-            if (currentToken().type != TokenType::IDENTIFIER) {
+            if (currentToken().tokenType != TokenType::IDENTIFIER) {
                 error("Expected parameter name");
             }
             
@@ -196,7 +196,7 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
 }
 
 std::unique_ptr<Stmt> Parser::parseStatement() {
-    switch (currentToken().type) {
+    switch (currentToken().tokenType) {
         case TokenType::DELIMITER_LBRACE:
             return parseCompoundStatement();
         case TokenType::KEYWORD_IF:
@@ -224,8 +224,8 @@ std::unique_ptr<CompoundStmt> Parser::parseCompoundStatement() {
     
     auto compound = std::make_unique<CompoundStmt>(line, column);
     
-    while (currentToken().type != TokenType::DELIMITER_RBRACE && 
-           currentToken().type != TokenType::TOKEN_EOF) {
+    while (currentToken().tokenType != TokenType::DELIMITER_RBRACE && 
+           currentToken().tokenType != TokenType::TOKEN_EOF) {
         auto stmt = parseStatement();
         if (stmt) {
             compound->statements.push_back(std::move(stmt));
@@ -251,7 +251,7 @@ std::unique_ptr<IfStmt> Parser::parseIfStatement() {
     
     ifStmt->thenBranch = parseStatement();
     
-    if (currentToken().type == TokenType::KEYWORD_ELSE) {
+    if (currentToken().tokenType == TokenType::KEYWORD_ELSE) {
         advance();
         ifStmt->elseBranch = parseStatement();
     }
@@ -286,20 +286,20 @@ std::unique_ptr<ForStmt> Parser::parseForStatement() {
     auto forStmt = std::make_unique<ForStmt>(line, column);
     
     // 初始化部分
-    if (currentToken().type != TokenType::DELIMITER_SEMICOLON) {
+    if (currentToken().tokenType != TokenType::DELIMITER_SEMICOLON) {
         forStmt->init = parseStatement();
     } else {
         advance();
     }
     
     // 条件部分
-    if (currentToken().type != TokenType::DELIMITER_SEMICOLON) {
+    if (currentToken().tokenType != TokenType::DELIMITER_SEMICOLON) {
         forStmt->condition = parseExpression();
     }
     expect(TokenType::DELIMITER_SEMICOLON);
     
     // 增量部分
-    if (currentToken().type != TokenType::DELIMITER_RPAREN) {
+    if (currentToken().tokenType != TokenType::DELIMITER_RPAREN) {
         forStmt->increment = parseExpression();
     }
     expect(TokenType::DELIMITER_RPAREN);
@@ -317,7 +317,7 @@ std::unique_ptr<ReturnStmt> Parser::parseReturnStatement() {
     
     auto returnStmt = std::make_unique<ReturnStmt>(line, column);
     
-    if (currentToken().type != TokenType::DELIMITER_SEMICOLON) {
+    if (currentToken().tokenType != TokenType::DELIMITER_SEMICOLON) {
         returnStmt->value = parseExpression();
     }
     
@@ -365,7 +365,7 @@ std::unique_ptr<Expr> Parser::parseExpression() {
 std::unique_ptr<Expr> Parser::parseAssignment() {
     auto expr = parseLogicalOr();
     
-    if (currentToken().type == TokenType::OPERATOR_ASSIGN) {
+    if (currentToken().tokenType == TokenType::OPERATOR_ASSIGN) {
         // 检查左边是否是标识符
         if (expr->type != ASTNodeType::IDENTIFIER_EXPR) {
             error("Left side of assignment must be an identifier");
@@ -387,7 +387,7 @@ std::unique_ptr<Expr> Parser::parseAssignment() {
 std::unique_ptr<Expr> Parser::parseLogicalOr() {
     auto expr = parseLogicalAnd();
     
-    while (currentToken().type == TokenType::OPERATOR_LOGICAL_OR) {
+    while (currentToken().tokenType == TokenType::OPERATOR_LOGICAL_OR) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -406,7 +406,7 @@ std::unique_ptr<Expr> Parser::parseLogicalOr() {
 std::unique_ptr<Expr> Parser::parseLogicalAnd() {
     auto expr = parseEquality();
     
-    while (currentToken().type == TokenType::OPERATOR_LOGICAL_AND) {
+    while (currentToken().tokenType == TokenType::OPERATOR_LOGICAL_AND) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -425,8 +425,8 @@ std::unique_ptr<Expr> Parser::parseLogicalAnd() {
 std::unique_ptr<Expr> Parser::parseEquality() {
     auto expr = parseRelational();
     
-    while (currentToken().type == TokenType::OPERATOR_EQUAL || 
-           currentToken().type == TokenType::OPERATOR_NOT_EQUAL) {
+    while (currentToken().tokenType == TokenType::OPERATOR_EQUAL || 
+           currentToken().tokenType == TokenType::OPERATOR_NOT_EQUAL) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -445,10 +445,10 @@ std::unique_ptr<Expr> Parser::parseEquality() {
 std::unique_ptr<Expr> Parser::parseRelational() {
     auto expr = parseAdditive();
     
-    while (currentToken().type == TokenType::OPERATOR_LESS || 
-           currentToken().type == TokenType::OPERATOR_LESS_EQUAL ||
-           currentToken().type == TokenType::OPERATOR_GREATER || 
-           currentToken().type == TokenType::OPERATOR_GREATER_EQUAL) {
+    while (currentToken().tokenType == TokenType::OPERATOR_LESS || 
+           currentToken().tokenType == TokenType::OPERATOR_LESS_EQUAL ||
+           currentToken().tokenType == TokenType::OPERATOR_GREATER || 
+           currentToken().tokenType == TokenType::OPERATOR_GREATER_EQUAL) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -467,8 +467,8 @@ std::unique_ptr<Expr> Parser::parseRelational() {
 std::unique_ptr<Expr> Parser::parseAdditive() {
     auto expr = parseMultiplicative();
     
-    while (currentToken().type == TokenType::OPERATOR_PLUS || 
-           currentToken().type == TokenType::OPERATOR_MINUS) {
+    while (currentToken().tokenType == TokenType::OPERATOR_PLUS || 
+           currentToken().tokenType == TokenType::OPERATOR_MINUS) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -487,9 +487,9 @@ std::unique_ptr<Expr> Parser::parseAdditive() {
 std::unique_ptr<Expr> Parser::parseMultiplicative() {
     auto expr = parseUnary();
     
-    while (currentToken().type == TokenType::OPERATOR_MULTIPLY || 
-           currentToken().type == TokenType::OPERATOR_DIVIDE ||
-           currentToken().type == TokenType::OPERATOR_MODULO) {
+    while (currentToken().tokenType == TokenType::OPERATOR_MULTIPLY || 
+           currentToken().tokenType == TokenType::OPERATOR_DIVIDE ||
+           currentToken().tokenType == TokenType::OPERATOR_MODULO) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -506,8 +506,8 @@ std::unique_ptr<Expr> Parser::parseMultiplicative() {
 }
 
 std::unique_ptr<Expr> Parser::parseUnary() {
-    if (currentToken().type == TokenType::OPERATOR_MINUS || 
-        currentToken().type == TokenType::OPERATOR_LOGICAL_NOT) {
+    if (currentToken().tokenType == TokenType::OPERATOR_MINUS || 
+        currentToken().tokenType == TokenType::OPERATOR_LOGICAL_NOT) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -525,7 +525,7 @@ std::unique_ptr<Expr> Parser::parseUnary() {
 std::unique_ptr<Expr> Parser::parsePrimary() {
     Token token = currentToken();
     
-    switch (token.type) {
+    switch (token.tokenType) {
         case TokenType::INTEGER_CONSTANT: {
             int value = std::stoi(token.value);
             advance();
@@ -571,7 +571,7 @@ std::unique_ptr<Expr> Parser::parseCall(const std::string& callee) {
     
     expect(TokenType::DELIMITER_LPAREN);
     
-    if (currentToken().type != TokenType::DELIMITER_RPAREN) {
+    if (currentToken().tokenType != TokenType::DELIMITER_RPAREN) {
         do {
             callExpr->arguments.push_back(parseExpression());
         } while (match(TokenType::DELIMITER_COMMA));

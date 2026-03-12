@@ -265,7 +265,7 @@ std::vector<Token> Lexer::tokenize() {
         Token token = nextToken();
         tokens.push_back(token);
         
-        if (token.type == TokenType::TOKEN_EOF) {
+        if (token.tokenType == TokenType::TOKEN_EOF) {
             break;
         }
     }

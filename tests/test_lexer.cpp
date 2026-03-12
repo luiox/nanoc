@@ -1,8 +1,13 @@
+#include "../ncc/lexer.h"
 #include <gtest/gtest.h>
 #include <spdlog/spdlog.h>
-#include "../ncc/lexer.h"
 #include <string>
 #include <vector>
+
+// 防止Windows宏冲突
+#ifdef type
+#undef type
+#endif
 
 // 测试基本关键字识别
 TEST(LexerTest, Keywords) {
@@ -14,37 +19,37 @@ TEST(LexerTest, Keywords) {
     // 应该有10个关键字token + 1个EOF token
     ASSERT_EQ(tokens.size(), 11);
     
-    EXPECT_EQ(tokens[0].type, TokenType::KEYWORD_INT);
+    EXPECT_EQ(tokens[0].tokenType, TokenType::KEYWORD_INT);
     EXPECT_EQ(tokens[0].value, "int");
     
-    EXPECT_EQ(tokens[1].type, TokenType::KEYWORD_CHAR);
+    EXPECT_EQ(tokens[1].tokenType, TokenType::KEYWORD_CHAR);
     EXPECT_EQ(tokens[1].value, "char");
     
-    EXPECT_EQ(tokens[2].type, TokenType::KEYWORD_VOID);
+    EXPECT_EQ(tokens[2].tokenType, TokenType::KEYWORD_VOID);
     EXPECT_EQ(tokens[2].value, "void");
     
-    EXPECT_EQ(tokens[3].type, TokenType::KEYWORD_IF);
+    EXPECT_EQ(tokens[3].tokenType, TokenType::KEYWORD_IF);
     EXPECT_EQ(tokens[3].value, "if");
     
-    EXPECT_EQ(tokens[4].type, TokenType::KEYWORD_ELSE);
+    EXPECT_EQ(tokens[4].tokenType, TokenType::KEYWORD_ELSE);
     EXPECT_EQ(tokens[4].value, "else");
     
-    EXPECT_EQ(tokens[5].type, TokenType::KEYWORD_WHILE);
+    EXPECT_EQ(tokens[5].tokenType, TokenType::KEYWORD_WHILE);
     EXPECT_EQ(tokens[5].value, "while");
     
-    EXPECT_EQ(tokens[6].type, TokenType::KEYWORD_FOR);
+    EXPECT_EQ(tokens[6].tokenType, TokenType::KEYWORD_FOR);
     EXPECT_EQ(tokens[6].value, "for");
     
-    EXPECT_EQ(tokens[7].type, TokenType::KEYWORD_RETURN);
+    EXPECT_EQ(tokens[7].tokenType, TokenType::KEYWORD_RETURN);
     EXPECT_EQ(tokens[7].value, "return");
     
-    EXPECT_EQ(tokens[8].type, TokenType::KEYWORD_BREAK);
+    EXPECT_EQ(tokens[8].tokenType, TokenType::KEYWORD_BREAK);
     EXPECT_EQ(tokens[8].value, "break");
     
-    EXPECT_EQ(tokens[9].type, TokenType::KEYWORD_CONTINUE);
+    EXPECT_EQ(tokens[9].tokenType, TokenType::KEYWORD_CONTINUE);
     EXPECT_EQ(tokens[9].value, "continue");
     
-    EXPECT_EQ(tokens[10].type, TokenType::TOKEN_EOF);
+    EXPECT_EQ(tokens[10].tokenType, TokenType::TOKEN_EOF);
 }
 
 // 测试标识符识别
@@ -56,13 +61,13 @@ TEST(LexerTest, Identifiers) {
     
     ASSERT_EQ(tokens.size(), 4); // 3个标识符 + 1个EOF
     
-    EXPECT_EQ(tokens[0].type, TokenType::IDENTIFIER);
+    EXPECT_EQ(tokens[0].tokenType, TokenType::IDENTIFIER);
     EXPECT_EQ(tokens[0].value, "variable_name");
     
-    EXPECT_EQ(tokens[1].type, TokenType::IDENTIFIER);
+    EXPECT_EQ(tokens[1].tokenType, TokenType::IDENTIFIER);
     EXPECT_EQ(tokens[1].value, "_private_var");
     
-    EXPECT_EQ(tokens[2].type, TokenType::IDENTIFIER);
+    EXPECT_EQ(tokens[2].tokenType, TokenType::IDENTIFIER);
     EXPECT_EQ(tokens[2].value, "var123");
 }
 
@@ -75,13 +80,13 @@ TEST(LexerTest, IntegerConstants) {
     
     ASSERT_EQ(tokens.size(), 4); // 3个整数 + 1个EOF
     
-    EXPECT_EQ(tokens[0].type, TokenType::INTEGER_CONSTANT);
+    EXPECT_EQ(tokens[0].tokenType, TokenType::INTEGER_CONSTANT);
     EXPECT_EQ(tokens[0].value, "0");
     
-    EXPECT_EQ(tokens[1].type, TokenType::INTEGER_CONSTANT);
+    EXPECT_EQ(tokens[1].tokenType, TokenType::INTEGER_CONSTANT);
     EXPECT_EQ(tokens[1].value, "123");
     
-    EXPECT_EQ(tokens[2].type, TokenType::INTEGER_CONSTANT);
+    EXPECT_EQ(tokens[2].tokenType, TokenType::INTEGER_CONSTANT);
     EXPECT_EQ(tokens[2].value, "456789");
 }
 

@@ -51,6 +51,12 @@ public:
     // 设置AX值
     void setAX(int32_t value);
     
+    // 获取flags值
+    int32_t getFlags();
+    
+    // 设置flags值
+    void setFlags(int32_t value);
+    
     // 获取栈大小
     int32_t getStackSize();
     
@@ -68,11 +74,41 @@ private:
     int32_t m_sp;
     int32_t m_bp;
     int32_t m_ax;
+    int32_t m_flags; // 状态寄存器，用于条件跳转
     int32_t m_registers[8]; // R0-R7
     int8_t * m_stack;
     int8_t * m_code;
     int32_t m_stackSize;
     int64_t m_codeSize;
+    
+    // 指令处理函数
+    void executeLMM();
+    void executeST();
+    void executeLEA();
+    void executeADD();
+    void executeSUB();
+    void executeMUL();
+    void executeDIV();
+    void executeMOD();
+    void executeNOT();
+    void executeAND();
+    void executeOR();
+    void executeXOR();
+    void executeSHL();
+    void executeSHR();
+    void executeEQ();
+    void executeNE();
+    void executeLT();
+    void executeLE();
+    void executeGT();
+    void executeGE();
+    void executePUSH();
+    void executePOP();
+    void executeJMP();
+    void executeJIC();
+    void executeCALL();
+    void executeRET();
+    void executeTRAP();
 };
 
 void Nvm_init(struct Nvm * vm, int64_t stack_size);

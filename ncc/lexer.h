@@ -5,6 +5,11 @@
 #include <vector>
 #include <map>
 
+// 防止Windows宏冲突
+#ifdef type
+#undef type
+#endif
+
 // Token type enum
 enum class TokenType : int {
     // Keywords
@@ -60,13 +65,13 @@ enum class TokenType : int {
 
 // Token结构
 struct Token {
-    TokenType type;
+    TokenType tokenType;
     std::string value;
     int line;
     int column;
     
     Token(TokenType t, const std::string& v, int l, int c) 
-        : type(t), value(v), line(l), column(c) {}
+        : tokenType(t), value(v), line(l), column(c) {}
 };
 
 // 词法分析器类
