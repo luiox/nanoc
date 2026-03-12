@@ -20,11 +20,55 @@ public:
     void print_info();
 
     void print_stack(int32_t start, int32_t end);
+    
+    // 获取寄存器值
+    int32_t getRegister(int32_t regIndex);
+    
+    // 设置寄存器值
+    void setRegister(int32_t regIndex, int32_t value);
+    
+    // 获取PC值
+    int32_t getPC();
+    
+    // 设置PC值
+    void setPC(int32_t value);
+    
+    // 获取SP值
+    int32_t getSP();
+    
+    // 设置SP值
+    void setSP(int32_t value);
+    
+    // 获取BP值
+    int32_t getBP();
+    
+    // 设置BP值
+    void setBP(int32_t value);
+    
+    // 获取AX值
+    int32_t getAX();
+    
+    // 设置AX值
+    void setAX(int32_t value);
+    
+    // 获取栈大小
+    int32_t getStackSize();
+    
+    // 获取代码大小
+    int64_t getCodeSize();
+    
+    // 获取栈指针
+    int8_t* getStack();
+    
+    // 获取代码指针
+    int8_t* getCode();
+    
 private:
     int32_t m_pc;
     int32_t m_sp;
     int32_t m_bp;
     int32_t m_ax;
+    int32_t m_registers[8]; // R0-R7
     int8_t * m_stack;
     int8_t * m_code;
     int32_t m_stackSize;
