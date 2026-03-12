@@ -13,6 +13,7 @@ target("ncc")
     add_includedirs("ncc")
     add_files("ncc/**.c")
     add_files("ncc/**.cpp")
+    add_packages("spdlog")
 
 -- NanoVM
 target("nvm")
@@ -38,6 +39,8 @@ target("tests")
     add_files("nvm/instructions.cpp")
     add_files("nvm/core.cpp")
     add_files("ncc/lexer.cpp")
+    add_files("ncc/parser.cpp")
+    add_files("ncc/codegen.cpp")
     add_packages("gtest", "spdlog")
 
 --

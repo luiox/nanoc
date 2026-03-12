@@ -5,9 +5,9 @@
 #include <vector>
 #include <map>
 
-// Token类型枚举
+// Token type enum
 enum class TokenType : int {
-    // 关键字
+    // Keywords
     KEYWORD_INT,
     KEYWORD_CHAR,
     KEYWORD_VOID,
@@ -19,14 +19,14 @@ enum class TokenType : int {
     KEYWORD_BREAK,
     KEYWORD_CONTINUE,
     
-    // 标识符
+    // Identifiers
     IDENTIFIER,
     
-    // 常量
+    // Constants
     INTEGER_CONSTANT,
     CHAR_CONSTANT,
     
-    // 运算符
+    // Operators
     OPERATOR_PLUS,      // +
     OPERATOR_MINUS,     // -
     OPERATOR_MULTIPLY,  // *
@@ -43,7 +43,7 @@ enum class TokenType : int {
     OPERATOR_LOGICAL_OR,  // ||
     OPERATOR_LOGICAL_NOT, // !
     
-    // 分隔符
+    // Delimiters
     DELIMITER_SEMICOLON,    // ;
     DELIMITER_COMMA,        // ,
     DELIMITER_LPAREN,       // (
@@ -53,9 +53,9 @@ enum class TokenType : int {
     DELIMITER_LBRACKET,     // [
     DELIMITER_RBRACKET,     // ]
     
-    // 特殊Token
-    TOKEN_EOF,          // 文件结束
-    TOKEN_UNKNOWN       // 未知Token
+    // Special tokens
+    TOKEN_EOF,          // End of file
+    TOKEN_UNKNOWN       // Unknown token
 };
 
 // Token结构
