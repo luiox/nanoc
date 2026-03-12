@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 #include <spdlog/spdlog.h>
-#include "../ncc/lexer.h"
-#include "../ncc/parser.h"
-#include "../ncc/codegen.h"
+#include "../ncc/lexer.hpp"
+#include "../ncc/parser.hpp"
+#include "../ncc/codegen.hpp"
 #include <string>
 #include <vector>
 

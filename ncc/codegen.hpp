@@ -1,7 +1,7 @@
 #ifndef NCC_CODEGEN_H
 #define NCC_CODEGEN_H
 
-#include "ast.h"
+#include "ast.hpp"
 #include <string>
 #include <vector>
 #include <map>
@@ -33,6 +33,7 @@ public:
     void visit(IdentifierExpr& node) override;
     void visit(IntegerLiteral& node) override;
     void visit(CharLiteral& node) override;
+    void visit(StmtVarDeclaration& node) override;
     
 private:
     std::string m_output;

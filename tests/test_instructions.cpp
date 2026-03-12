@@ -105,12 +105,3 @@ TEST(InstructionTest, RETParsing) {
     delete parsed;
 }
 
-int main(int argc, char **argv) {
-    // 初始化spdlog
-    spdlog::set_level(spdlog::level::debug);
-    
-    // 初始化gtest
-    ::testing::InitGoogleTest(&argc, argv);
-    
-    return RUN_ALL_TESTS();
-}

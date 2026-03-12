@@ -1,4 +1,4 @@
-#include "codegen.h"
+#include "codegen.hpp"
 #include <sstream>
 #include <stdexcept>
 
@@ -486,4 +486,27 @@ void CodeGenerator::visit(CharLiteral& node) {
     emit("    ; Char literal: '" + std::string(1, node.value) + "'");
     emit("    lmm R0, " + std::to_string(static_cast<int>(node.value)));
     emit("    push R0");
+}
+
+void CodeGenerator::visit(StmtVarDeclaration& node) {
+    // 在符号表中添加变量
+    Symbol symbol;
+    symbol.name = node.name;
+    symbol.type = node.type;
+    symbol.offset = m_currentOffset;
+    m_symbolTable[node.name] = symbol;
+    
+    // 分配栈空间
+    m_currentOffset += 4; // 假设所有变量都是4字节
+    
+    // 如果有初始化表达式
+    if (node.initializer) {
+        // 计算初始化值
+        int value = evaluateExpression(*node.initializer);
+        
+        // 生成初始化代码
+        emit("    ; Initialize variable " + node.name);
+        emit("    lmm R0, " + std::to_string(value));
+        emit("    st R0, [BP-" + std::to_string(symbol.offset) + "]");
+    }
 }

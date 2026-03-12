@@ -5,13 +5,8 @@
 #include <vector>
 #include <map>
 
-// 防止Windows宏冲突
-#ifdef type
-#undef type
-#endif
-
-// Token type enum
-enum class TokenType : int {
+// Token type enum - 使用NTokenKind避免Windows宏冲突
+enum class NTokenKind : int {
     // Keywords
     KEYWORD_INT,
     KEYWORD_CHAR,
@@ -65,13 +60,13 @@ enum class TokenType : int {
 
 // Token结构
 struct Token {
-    TokenType tokenType;
+    NTokenKind kind;
     std::string value;
     int line;
     int column;
     
-    Token(TokenType t, const std::string& v, int l, int c) 
-        : tokenType(t), value(v), line(l), column(c) {}
+    Token(NTokenKind k, const std::string& v, int l, int c) 
+        : kind(k), value(v), line(l), column(c) {}
 };
 
 // 词法分析器类
@@ -96,7 +91,7 @@ private:
     int m_column;
     
     // 关键字映射
-    std::map<std::string, TokenType> m_keywords;
+    std::map<std::string, NTokenKind> m_keywords;
     
     // 辅助函数
     char currentChar() const;

@@ -191,6 +191,19 @@ public:
     void accept(ASTVisitor& visitor) override;
 };
 
+// 变量声明语句节点（用于在语句上下文中声明变量）
+class StmtVarDeclaration : public Stmt {
+public:
+    std::string type;
+    std::string name;
+    std::unique_ptr<Expr> initializer;
+    
+    StmtVarDeclaration(const std::string& t, const std::string& n, int l, int c)
+        : Stmt(ASTNodeType::VAR_DECLARATION, l, c), type(t), name(n) {}
+    
+    void accept(ASTVisitor& visitor) override;
+};
+
 // 二元表达式节点
 class BinaryExpr : public Expr {
 public:
@@ -289,6 +302,7 @@ public:
     virtual void visit(IdentifierExpr& node) = 0;
     virtual void visit(IntegerLiteral& node) = 0;
     virtual void visit(CharLiteral& node) = 0;
+    virtual void visit(StmtVarDeclaration& node) = 0;
 };
 
 #endif // NCC_AST_H

@@ -41,6 +41,7 @@ target("tests")
     add_files("ncc/lexer.cpp")
     add_files("ncc/parser.cpp")
     add_files("ncc/codegen.cpp")
+    add_files("ncc/ast.cpp")
     add_packages("gtest", "spdlog")
 
 --

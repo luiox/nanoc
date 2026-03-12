@@ -1,4 +1,4 @@
-#include "lexer.h"
+#include "lexer.hpp"
 #include <cctype>
 #include <stdexcept>
 
@@ -8,16 +8,16 @@ Lexer::Lexer(const std::string& source)
 }
 
 void Lexer::initKeywords() {
-    m_keywords["int"] = TokenType::KEYWORD_INT;
-    m_keywords["char"] = TokenType::KEYWORD_CHAR;
-    m_keywords["void"] = TokenType::KEYWORD_VOID;
-    m_keywords["if"] = TokenType::KEYWORD_IF;
-    m_keywords["else"] = TokenType::KEYWORD_ELSE;
-    m_keywords["while"] = TokenType::KEYWORD_WHILE;
-    m_keywords["for"] = TokenType::KEYWORD_FOR;
-    m_keywords["return"] = TokenType::KEYWORD_RETURN;
-    m_keywords["break"] = TokenType::KEYWORD_BREAK;
-    m_keywords["continue"] = TokenType::KEYWORD_CONTINUE;
+    m_keywords["int"] = NTokenKind::KEYWORD_INT;
+    m_keywords["char"] = NTokenKind::KEYWORD_CHAR;
+    m_keywords["void"] = NTokenKind::KEYWORD_VOID;
+    m_keywords["if"] = NTokenKind::KEYWORD_IF;
+    m_keywords["else"] = NTokenKind::KEYWORD_ELSE;
+    m_keywords["while"] = NTokenKind::KEYWORD_WHILE;
+    m_keywords["for"] = NTokenKind::KEYWORD_FOR;
+    m_keywords["return"] = NTokenKind::KEYWORD_RETURN;
+    m_keywords["break"] = NTokenKind::KEYWORD_BREAK;
+    m_keywords["continue"] = NTokenKind::KEYWORD_CONTINUE;
 }
 
 char Lexer::currentChar() const {
@@ -90,7 +90,7 @@ Token Lexer::readIdentifier() {
         return Token(it->second, value, startLine, startColumn);
     }
     
-    return Token(TokenType::IDENTIFIER, value, startLine, startColumn);
+    return Token(NTokenKind::IDENTIFIER, value, startLine, startColumn);
 }
 
 Token Lexer::readNumber() {
@@ -103,7 +103,7 @@ Token Lexer::readNumber() {
         advance();
     }
     
-    return Token(TokenType::INTEGER_CONSTANT, value, startLine, startColumn);
+    return Token(NTokenKind::INTEGER_CONSTANT, value, startLine, startColumn);
 }
 
 Token Lexer::readChar() {
@@ -121,7 +121,7 @@ Token Lexer::readChar() {
     advance(); // 跳过结尾的单引号
     
     std::string value(1, c);
-    return Token(TokenType::CHAR_CONSTANT, value, startLine, startColumn);
+    return Token(NTokenKind::CHAR_CONSTANT, value, startLine, startColumn);
 }
 
 Token Lexer::readOperator() {
@@ -132,49 +132,49 @@ Token Lexer::readOperator() {
     
     switch (c) {
         case '+':
-            return Token(TokenType::OPERATOR_PLUS, "+", startLine, startColumn);
+            return Token(NTokenKind::OPERATOR_PLUS, "+", startLine, startColumn);
         case '-':
-            return Token(TokenType::OPERATOR_MINUS, "-", startLine, startColumn);
+            return Token(NTokenKind::OPERATOR_MINUS, "-", startLine, startColumn);
         case '*':
-            return Token(TokenType::OPERATOR_MULTIPLY, "*", startLine, startColumn);
+            return Token(NTokenKind::OPERATOR_MULTIPLY, "*", startLine, startColumn);
         case '/':
-            return Token(TokenType::OPERATOR_DIVIDE, "/", startLine, startColumn);
+            return Token(NTokenKind::OPERATOR_DIVIDE, "/", startLine, startColumn);
         case '%':
-            return Token(TokenType::OPERATOR_MODULO, "%", startLine, startColumn);
+            return Token(NTokenKind::OPERATOR_MODULO, "%", startLine, startColumn);
         case '=':
             if (currentChar() == '=') {
                 advance();
-                return Token(TokenType::OPERATOR_EQUAL, "==", startLine, startColumn);
+                return Token(NTokenKind::OPERATOR_EQUAL, "==", startLine, startColumn);
             }
-            return Token(TokenType::OPERATOR_ASSIGN, "=", startLine, startColumn);
+            return Token(NTokenKind::OPERATOR_ASSIGN, "=", startLine, startColumn);
         case '!':
             if (currentChar() == '=') {
                 advance();
-                return Token(TokenType::OPERATOR_NOT_EQUAL, "!=", startLine, startColumn);
+                return Token(NTokenKind::OPERATOR_NOT_EQUAL, "!=", startLine, startColumn);
             }
-            return Token(TokenType::OPERATOR_LOGICAL_NOT, "!", startLine, startColumn);
+            return Token(NTokenKind::OPERATOR_LOGICAL_NOT, "!", startLine, startColumn);
         case '<':
             if (currentChar() == '=') {
                 advance();
-                return Token(TokenType::OPERATOR_LESS_EQUAL, "<=", startLine, startColumn);
+                return Token(NTokenKind::OPERATOR_LESS_EQUAL, "<=", startLine, startColumn);
             }
-            return Token(TokenType::OPERATOR_LESS, "<", startLine, startColumn);
+            return Token(NTokenKind::OPERATOR_LESS, "<", startLine, startColumn);
         case '>':
             if (currentChar() == '=') {
                 advance();
-                return Token(TokenType::OPERATOR_GREATER_EQUAL, ">=", startLine, startColumn);
+                return Token(NTokenKind::OPERATOR_GREATER_EQUAL, ">=", startLine, startColumn);
             }
-            return Token(TokenType::OPERATOR_GREATER, ">", startLine, startColumn);
+            return Token(NTokenKind::OPERATOR_GREATER, ">", startLine, startColumn);
         case '&':
             if (currentChar() == '&') {
                 advance();
-                return Token(TokenType::OPERATOR_LOGICAL_AND, "&&", startLine, startColumn);
+                return Token(NTokenKind::OPERATOR_LOGICAL_AND, "&&", startLine, startColumn);
             }
             throw std::runtime_error("Expected '&' at line " + std::to_string(m_line));
         case '|':
             if (currentChar() == '|') {
                 advance();
-                return Token(TokenType::OPERATOR_LOGICAL_OR, "||", startLine, startColumn);
+                return Token(NTokenKind::OPERATOR_LOGICAL_OR, "||", startLine, startColumn);
             }
             throw std::runtime_error("Expected '|' at line " + std::to_string(m_line));
         default:
@@ -190,21 +190,21 @@ Token Lexer::readDelimiter() {
     
     switch (c) {
         case ';':
-            return Token(TokenType::DELIMITER_SEMICOLON, ";", startLine, startColumn);
+            return Token(NTokenKind::DELIMITER_SEMICOLON, ";", startLine, startColumn);
         case ',':
-            return Token(TokenType::DELIMITER_COMMA, ",", startLine, startColumn);
+            return Token(NTokenKind::DELIMITER_COMMA, ",", startLine, startColumn);
         case '(':
-            return Token(TokenType::DELIMITER_LPAREN, "(", startLine, startColumn);
+            return Token(NTokenKind::DELIMITER_LPAREN, "(", startLine, startColumn);
         case ')':
-            return Token(TokenType::DELIMITER_RPAREN, ")", startLine, startColumn);
+            return Token(NTokenKind::DELIMITER_RPAREN, ")", startLine, startColumn);
         case '{':
-            return Token(TokenType::DELIMITER_LBRACE, "{", startLine, startColumn);
+            return Token(NTokenKind::DELIMITER_LBRACE, "{", startLine, startColumn);
         case '}':
-            return Token(TokenType::DELIMITER_RBRACE, "}", startLine, startColumn);
+            return Token(NTokenKind::DELIMITER_RBRACE, "}", startLine, startColumn);
         case '[':
-            return Token(TokenType::DELIMITER_LBRACKET, "[", startLine, startColumn);
+            return Token(NTokenKind::DELIMITER_LBRACKET, "[", startLine, startColumn);
         case ']':
-            return Token(TokenType::DELIMITER_RBRACKET, "]", startLine, startColumn);
+            return Token(NTokenKind::DELIMITER_RBRACKET, "]", startLine, startColumn);
         default:
             throw std::runtime_error("Unknown delimiter at line " + std::to_string(m_line));
     }
@@ -221,7 +221,7 @@ Token Lexer::nextToken() {
     }
     
     if (m_pos >= m_source.length()) {
-        return Token(TokenType::TOKEN_EOF, "", m_line, m_column);
+        return Token(NTokenKind::TOKEN_EOF, "", m_line, m_column);
     }
     
     char c = currentChar();
@@ -255,7 +255,7 @@ Token Lexer::nextToken() {
     
     // 未知字符
     advance();
-    return Token(TokenType::TOKEN_UNKNOWN, std::string(1, c), m_line, m_column - 1);
+    return Token(NTokenKind::TOKEN_UNKNOWN, std::string(1, c), m_line, m_column - 1);
 }
 
 std::vector<Token> Lexer::tokenize() {
@@ -265,7 +265,7 @@ std::vector<Token> Lexer::tokenize() {
         Token token = nextToken();
         tokens.push_back(token);
         
-        if (token.tokenType == TokenType::TOKEN_EOF) {
+        if (token.kind == NTokenKind::TOKEN_EOF) {
             break;
         }
     }

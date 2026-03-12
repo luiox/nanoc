@@ -1,4 +1,4 @@
-#include "ast.h"
+#include "ast.hpp"
 
 // Program节点的accept实现
 void Program::accept(ASTVisitor& visitor) {
@@ -87,5 +87,10 @@ void IntegerLiteral::accept(ASTVisitor& visitor) {
 
 // CharLiteral节点的accept实现
 void CharLiteral::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}
+
+// StmtVarDeclaration节点的accept实现
+void StmtVarDeclaration::accept(ASTVisitor& visitor) {
     visitor.visit(*this);
 }

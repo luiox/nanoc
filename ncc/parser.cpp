@@ -1,4 +1,4 @@
-#include "parser.h"
+#include "parser.hpp"
 #include <stdexcept>
 #include <sstream>
 
@@ -8,14 +8,14 @@ Parser::Parser(const std::vector<Token>& tokens)
 
 Token Parser::currentToken() const {
     if (m_pos >= m_tokens.size()) {
-        return Token(TokenType::TOKEN_EOF, "", 0, 0);
+        return Token(NTokenKind::TOKEN_EOF, "", 0, 0);
     }
     return m_tokens[m_pos];
 }
 
 Token Parser::peekToken() const {
     if (m_pos + 1 >= m_tokens.size()) {
-        return Token(TokenType::TOKEN_EOF, "", 0, 0);
+        return Token(NTokenKind::TOKEN_EOF, "", 0, 0);
     }
     return m_tokens[m_pos + 1];
 }
@@ -26,21 +26,21 @@ void Parser::advance() {
     }
 }
 
-bool Parser::match(TokenType type) {
-    if (currentToken().tokenType == type) {
+bool Parser::match(NTokenKind kind) {
+    if (currentToken().kind == kind) {
         advance();
         return true;
     }
     return false;
 }
 
-bool Parser::expect(TokenType type) {
-    if (currentToken().tokenType == type) {
+bool Parser::expect(NTokenKind kind) {
+    if (currentToken().kind == kind) {
         advance();
         return true;
     }
-    error("Expected token type " + std::to_string(static_cast<int>(type)) + 
-          " but got " + std::to_string(static_cast<int>(currentToken().tokenType)));
+    error("Expected token kind " + std::to_string(static_cast<int>(kind)) + 
+          " but got " + std::to_string(static_cast<int>(currentToken().kind)));
     return false;
 }
 
@@ -55,7 +55,7 @@ void Parser::error(const std::string& message) {
 std::unique_ptr<Program> Parser::parse() {
     auto program = std::make_unique<Program>(currentToken().line, currentToken().column);
     
-    while (currentToken().tokenType != TokenType::TOKEN_EOF) {
+    while (currentToken().kind != NTokenKind::TOKEN_EOF) {
         auto decl = parseDeclaration();
         if (decl) {
             program->declarations.push_back(std::move(decl));
@@ -67,9 +67,9 @@ std::unique_ptr<Program> Parser::parse() {
 
 std::unique_ptr<Decl> Parser::parseDeclaration() {
     // 检查是否是类型关键字
-    if (currentToken().tokenType == TokenType::KEYWORD_INT || 
-        currentToken().tokenType == TokenType::KEYWORD_CHAR ||
-        currentToken().tokenType == TokenType::KEYWORD_VOID) {
+    if (currentToken().kind == NTokenKind::KEYWORD_INT || 
+        currentToken().kind == NTokenKind::KEYWORD_CHAR ||
+        currentToken().kind == NTokenKind::KEYWORD_VOID) {
         
         // 保存当前位置
         size_t startPos = m_pos;
@@ -79,14 +79,14 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         advance();
         
         // 获取名称
-        if (currentToken().tokenType != TokenType::IDENTIFIER) {
+        if (currentToken().kind != NTokenKind::IDENTIFIER) {
             error("Expected identifier after type");
         }
         std::string name = currentToken().value;
         advance();
         
         // 检查是函数声明还是变量声明
-        if (currentToken().tokenType == TokenType::DELIMITER_LPAREN) {
+        if (currentToken().kind == NTokenKind::DELIMITER_LPAREN) {
             // 函数声明
             m_pos = startPos; // 回退
             return parseFuncDeclaration();
@@ -103,9 +103,9 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
 
 std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
     // 获取类型
-    if (currentToken().tokenType != TokenType::KEYWORD_INT && 
-        currentToken().tokenType != TokenType::KEYWORD_CHAR &&
-        currentToken().tokenType != TokenType::KEYWORD_VOID) {
+    if (currentToken().kind != NTokenKind::KEYWORD_INT && 
+        currentToken().kind != NTokenKind::KEYWORD_CHAR &&
+        currentToken().kind != NTokenKind::KEYWORD_VOID) {
         error("Expected type keyword");
     }
     
@@ -115,7 +115,7 @@ std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
     advance();
     
     // 获取名称
-    if (currentToken().tokenType != TokenType::IDENTIFIER) {
+    if (currentToken().kind != NTokenKind::IDENTIFIER) {
         error("Expected identifier");
     }
     
@@ -125,22 +125,57 @@ std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
     auto varDecl = std::make_unique<VarDeclaration>(type, name, line, column);
     
     // 检查是否有初始化
-    if (currentToken().tokenType == TokenType::OPERATOR_ASSIGN) {
+    if (currentToken().kind == NTokenKind::OPERATOR_ASSIGN) {
         advance();
         varDecl->initializer = parseExpression();
     }
     
     // 期望分号
-    expect(TokenType::DELIMITER_SEMICOLON);
+    expect(NTokenKind::DELIMITER_SEMICOLON);
+    
+    return varDecl;
+}
+
+std::unique_ptr<Stmt> Parser::parseVarDeclarationStmt() {
+    // 获取类型
+    if (currentToken().kind != NTokenKind::KEYWORD_INT && 
+        currentToken().kind != NTokenKind::KEYWORD_CHAR &&
+        currentToken().kind != NTokenKind::KEYWORD_VOID) {
+        error("Expected type keyword");
+    }
+    
+    std::string type = currentToken().value;
+    int line = currentToken().line;
+    int column = currentToken().column;
+    advance();
+    
+    // 获取名称
+    if (currentToken().kind != NTokenKind::IDENTIFIER) {
+        error("Expected identifier");
+    }
+    
+    std::string name = currentToken().value;
+    advance();
+    
+    auto varDecl = std::make_unique<StmtVarDeclaration>(type, name, line, column);
+    
+    // 检查是否有初始化
+    if (currentToken().kind == NTokenKind::OPERATOR_ASSIGN) {
+        advance();
+        varDecl->initializer = parseExpression();
+    }
+    
+    // 期望分号
+    expect(NTokenKind::DELIMITER_SEMICOLON);
     
     return varDecl;
 }
 
 std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     // 获取返回类型
-    if (currentToken().tokenType != TokenType::KEYWORD_INT && 
-        currentToken().tokenType != TokenType::KEYWORD_CHAR &&
-        currentToken().tokenType != TokenType::KEYWORD_VOID) {
+    if (currentToken().kind != NTokenKind::KEYWORD_INT && 
+        currentToken().kind != NTokenKind::KEYWORD_CHAR &&
+        currentToken().kind != NTokenKind::KEYWORD_VOID) {
         error("Expected return type");
     }
     
@@ -150,7 +185,7 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     advance();
     
     // 获取函数名
-    if (currentToken().tokenType != TokenType::IDENTIFIER) {
+    if (currentToken().kind != NTokenKind::IDENTIFIER) {
         error("Expected function name");
     }
     
@@ -160,21 +195,21 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     auto funcDecl = std::make_unique<FuncDeclaration>(returnType, name, line, column);
     
     // 解析参数列表
-    expect(TokenType::DELIMITER_LPAREN);
+    expect(NTokenKind::DELIMITER_LPAREN);
     
-    if (currentToken().tokenType != TokenType::DELIMITER_RPAREN) {
+    if (currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
         do {
             // 解析参数
-            if (currentToken().tokenType != TokenType::KEYWORD_INT && 
-                currentToken().tokenType != TokenType::KEYWORD_CHAR &&
-                currentToken().tokenType != TokenType::KEYWORD_VOID) {
+            if (currentToken().kind != NTokenKind::KEYWORD_INT && 
+                currentToken().kind != NTokenKind::KEYWORD_CHAR &&
+                currentToken().kind != NTokenKind::KEYWORD_VOID) {
                 error("Expected parameter type");
             }
             
             std::string paramType = currentToken().value;
             advance();
             
-            if (currentToken().tokenType != TokenType::IDENTIFIER) {
+            if (currentToken().kind != NTokenKind::IDENTIFIER) {
                 error("Expected parameter name");
             }
             
@@ -184,10 +219,10 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
             funcDecl->parameters.push_back(
                 std::make_unique<VarDeclaration>(paramType, paramName, line, column));
             
-        } while (match(TokenType::DELIMITER_COMMA));
+        } while (match(NTokenKind::DELIMITER_COMMA));
     }
     
-    expect(TokenType::DELIMITER_RPAREN);
+    expect(NTokenKind::DELIMITER_RPAREN);
     
     // 解析函数体
     funcDecl->body = parseCompoundStatement();
@@ -196,21 +231,26 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
 }
 
 std::unique_ptr<Stmt> Parser::parseStatement() {
-    switch (currentToken().tokenType) {
-        case TokenType::DELIMITER_LBRACE:
+    switch (currentToken().kind) {
+        case NTokenKind::DELIMITER_LBRACE:
             return parseCompoundStatement();
-        case TokenType::KEYWORD_IF:
+        case NTokenKind::KEYWORD_IF:
             return parseIfStatement();
-        case TokenType::KEYWORD_WHILE:
+        case NTokenKind::KEYWORD_WHILE:
             return parseWhileStatement();
-        case TokenType::KEYWORD_FOR:
+        case NTokenKind::KEYWORD_FOR:
             return parseForStatement();
-        case TokenType::KEYWORD_RETURN:
+        case NTokenKind::KEYWORD_RETURN:
             return parseReturnStatement();
-        case TokenType::KEYWORD_BREAK:
+        case NTokenKind::KEYWORD_BREAK:
             return parseBreakStatement();
-        case TokenType::KEYWORD_CONTINUE:
+        case NTokenKind::KEYWORD_CONTINUE:
             return parseContinueStatement();
+        case NTokenKind::KEYWORD_INT:
+        case NTokenKind::KEYWORD_CHAR:
+        case NTokenKind::KEYWORD_VOID:
+            // 变量声明作为语句处理
+            return parseVarDeclarationStmt();
         default:
             return parseExprStatement();
     }
@@ -220,19 +260,19 @@ std::unique_ptr<CompoundStmt> Parser::parseCompoundStatement() {
     int line = currentToken().line;
     int column = currentToken().column;
     
-    expect(TokenType::DELIMITER_LBRACE);
+    expect(NTokenKind::DELIMITER_LBRACE);
     
     auto compound = std::make_unique<CompoundStmt>(line, column);
     
-    while (currentToken().tokenType != TokenType::DELIMITER_RBRACE && 
-           currentToken().tokenType != TokenType::TOKEN_EOF) {
+    while (currentToken().kind != NTokenKind::DELIMITER_RBRACE && 
+           currentToken().kind != NTokenKind::TOKEN_EOF) {
         auto stmt = parseStatement();
         if (stmt) {
             compound->statements.push_back(std::move(stmt));
         }
     }
     
-    expect(TokenType::DELIMITER_RBRACE);
+    expect(NTokenKind::DELIMITER_RBRACE);
     
     return compound;
 }
@@ -241,17 +281,17 @@ std::unique_ptr<IfStmt> Parser::parseIfStatement() {
     int line = currentToken().line;
     int column = currentToken().column;
     
-    expect(TokenType::KEYWORD_IF);
-    expect(TokenType::DELIMITER_LPAREN);
+    expect(NTokenKind::KEYWORD_IF);
+    expect(NTokenKind::DELIMITER_LPAREN);
     
     auto ifStmt = std::make_unique<IfStmt>(line, column);
     ifStmt->condition = parseExpression();
     
-    expect(TokenType::DELIMITER_RPAREN);
+    expect(NTokenKind::DELIMITER_RPAREN);
     
     ifStmt->thenBranch = parseStatement();
     
-    if (currentToken().tokenType == TokenType::KEYWORD_ELSE) {
+    if (currentToken().kind == NTokenKind::KEYWORD_ELSE) {
         advance();
         ifStmt->elseBranch = parseStatement();
     }
@@ -263,13 +303,13 @@ std::unique_ptr<WhileStmt> Parser::parseWhileStatement() {
     int line = currentToken().line;
     int column = currentToken().column;
     
-    expect(TokenType::KEYWORD_WHILE);
-    expect(TokenType::DELIMITER_LPAREN);
+    expect(NTokenKind::KEYWORD_WHILE);
+    expect(NTokenKind::DELIMITER_LPAREN);
     
     auto whileStmt = std::make_unique<WhileStmt>(line, column);
     whileStmt->condition = parseExpression();
     
-    expect(TokenType::DELIMITER_RPAREN);
+    expect(NTokenKind::DELIMITER_RPAREN);
     
     whileStmt->body = parseStatement();
     
@@ -280,29 +320,29 @@ std::unique_ptr<ForStmt> Parser::parseForStatement() {
     int line = currentToken().line;
     int column = currentToken().column;
     
-    expect(TokenType::KEYWORD_FOR);
-    expect(TokenType::DELIMITER_LPAREN);
+    expect(NTokenKind::KEYWORD_FOR);
+    expect(NTokenKind::DELIMITER_LPAREN);
     
     auto forStmt = std::make_unique<ForStmt>(line, column);
     
     // 初始化部分
-    if (currentToken().tokenType != TokenType::DELIMITER_SEMICOLON) {
+    if (currentToken().kind != NTokenKind::DELIMITER_SEMICOLON) {
         forStmt->init = parseStatement();
     } else {
         advance();
     }
     
     // 条件部分
-    if (currentToken().tokenType != TokenType::DELIMITER_SEMICOLON) {
+    if (currentToken().kind != NTokenKind::DELIMITER_SEMICOLON) {
         forStmt->condition = parseExpression();
     }
-    expect(TokenType::DELIMITER_SEMICOLON);
+    expect(NTokenKind::DELIMITER_SEMICOLON);
     
     // 增量部分
-    if (currentToken().tokenType != TokenType::DELIMITER_RPAREN) {
+    if (currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
         forStmt->increment = parseExpression();
     }
-    expect(TokenType::DELIMITER_RPAREN);
+    expect(NTokenKind::DELIMITER_RPAREN);
     
     forStmt->body = parseStatement();
     
@@ -313,15 +353,15 @@ std::unique_ptr<ReturnStmt> Parser::parseReturnStatement() {
     int line = currentToken().line;
     int column = currentToken().column;
     
-    expect(TokenType::KEYWORD_RETURN);
+    expect(NTokenKind::KEYWORD_RETURN);
     
     auto returnStmt = std::make_unique<ReturnStmt>(line, column);
     
-    if (currentToken().tokenType != TokenType::DELIMITER_SEMICOLON) {
+    if (currentToken().kind != NTokenKind::DELIMITER_SEMICOLON) {
         returnStmt->value = parseExpression();
     }
     
-    expect(TokenType::DELIMITER_SEMICOLON);
+    expect(NTokenKind::DELIMITER_SEMICOLON);
     
     return returnStmt;
 }
@@ -330,8 +370,8 @@ std::unique_ptr<BreakStmt> Parser::parseBreakStatement() {
     int line = currentToken().line;
     int column = currentToken().column;
     
-    expect(TokenType::KEYWORD_BREAK);
-    expect(TokenType::DELIMITER_SEMICOLON);
+    expect(NTokenKind::KEYWORD_BREAK);
+    expect(NTokenKind::DELIMITER_SEMICOLON);
     
     return std::make_unique<BreakStmt>(line, column);
 }
@@ -340,8 +380,8 @@ std::unique_ptr<ContinueStmt> Parser::parseContinueStatement() {
     int line = currentToken().line;
     int column = currentToken().column;
     
-    expect(TokenType::KEYWORD_CONTINUE);
-    expect(TokenType::DELIMITER_SEMICOLON);
+    expect(NTokenKind::KEYWORD_CONTINUE);
+    expect(NTokenKind::DELIMITER_SEMICOLON);
     
     return std::make_unique<ContinueStmt>(line, column);
 }
@@ -353,7 +393,7 @@ std::unique_ptr<ExprStmt> Parser::parseExprStatement() {
     auto exprStmt = std::make_unique<ExprStmt>(line, column);
     exprStmt->expression = parseExpression();
     
-    expect(TokenType::DELIMITER_SEMICOLON);
+    expect(NTokenKind::DELIMITER_SEMICOLON);
     
     return exprStmt;
 }
@@ -365,7 +405,7 @@ std::unique_ptr<Expr> Parser::parseExpression() {
 std::unique_ptr<Expr> Parser::parseAssignment() {
     auto expr = parseLogicalOr();
     
-    if (currentToken().tokenType == TokenType::OPERATOR_ASSIGN) {
+    if (currentToken().kind == NTokenKind::OPERATOR_ASSIGN) {
         // 检查左边是否是标识符
         if (expr->type != ASTNodeType::IDENTIFIER_EXPR) {
             error("Left side of assignment must be an identifier");
@@ -387,7 +427,7 @@ std::unique_ptr<Expr> Parser::parseAssignment() {
 std::unique_ptr<Expr> Parser::parseLogicalOr() {
     auto expr = parseLogicalAnd();
     
-    while (currentToken().tokenType == TokenType::OPERATOR_LOGICAL_OR) {
+    while (currentToken().kind == NTokenKind::OPERATOR_LOGICAL_OR) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -406,7 +446,7 @@ std::unique_ptr<Expr> Parser::parseLogicalOr() {
 std::unique_ptr<Expr> Parser::parseLogicalAnd() {
     auto expr = parseEquality();
     
-    while (currentToken().tokenType == TokenType::OPERATOR_LOGICAL_AND) {
+    while (currentToken().kind == NTokenKind::OPERATOR_LOGICAL_AND) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -425,8 +465,8 @@ std::unique_ptr<Expr> Parser::parseLogicalAnd() {
 std::unique_ptr<Expr> Parser::parseEquality() {
     auto expr = parseRelational();
     
-    while (currentToken().tokenType == TokenType::OPERATOR_EQUAL || 
-           currentToken().tokenType == TokenType::OPERATOR_NOT_EQUAL) {
+    while (currentToken().kind == NTokenKind::OPERATOR_EQUAL || 
+           currentToken().kind == NTokenKind::OPERATOR_NOT_EQUAL) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -445,10 +485,10 @@ std::unique_ptr<Expr> Parser::parseEquality() {
 std::unique_ptr<Expr> Parser::parseRelational() {
     auto expr = parseAdditive();
     
-    while (currentToken().tokenType == TokenType::OPERATOR_LESS || 
-           currentToken().tokenType == TokenType::OPERATOR_LESS_EQUAL ||
-           currentToken().tokenType == TokenType::OPERATOR_GREATER || 
-           currentToken().tokenType == TokenType::OPERATOR_GREATER_EQUAL) {
+    while (currentToken().kind == NTokenKind::OPERATOR_LESS || 
+           currentToken().kind == NTokenKind::OPERATOR_LESS_EQUAL ||
+           currentToken().kind == NTokenKind::OPERATOR_GREATER || 
+           currentToken().kind == NTokenKind::OPERATOR_GREATER_EQUAL) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -467,8 +507,8 @@ std::unique_ptr<Expr> Parser::parseRelational() {
 std::unique_ptr<Expr> Parser::parseAdditive() {
     auto expr = parseMultiplicative();
     
-    while (currentToken().tokenType == TokenType::OPERATOR_PLUS || 
-           currentToken().tokenType == TokenType::OPERATOR_MINUS) {
+    while (currentToken().kind == NTokenKind::OPERATOR_PLUS || 
+           currentToken().kind == NTokenKind::OPERATOR_MINUS) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -487,9 +527,9 @@ std::unique_ptr<Expr> Parser::parseAdditive() {
 std::unique_ptr<Expr> Parser::parseMultiplicative() {
     auto expr = parseUnary();
     
-    while (currentToken().tokenType == TokenType::OPERATOR_MULTIPLY || 
-           currentToken().tokenType == TokenType::OPERATOR_DIVIDE ||
-           currentToken().tokenType == TokenType::OPERATOR_MODULO) {
+    while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY || 
+           currentToken().kind == NTokenKind::OPERATOR_DIVIDE ||
+           currentToken().kind == NTokenKind::OPERATOR_MODULO) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -506,8 +546,8 @@ std::unique_ptr<Expr> Parser::parseMultiplicative() {
 }
 
 std::unique_ptr<Expr> Parser::parseUnary() {
-    if (currentToken().tokenType == TokenType::OPERATOR_MINUS || 
-        currentToken().tokenType == TokenType::OPERATOR_LOGICAL_NOT) {
+    if (currentToken().kind == NTokenKind::OPERATOR_MINUS || 
+        currentToken().kind == NTokenKind::OPERATOR_LOGICAL_NOT) {
         std::string op = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
@@ -525,37 +565,37 @@ std::unique_ptr<Expr> Parser::parseUnary() {
 std::unique_ptr<Expr> Parser::parsePrimary() {
     Token token = currentToken();
     
-    switch (token.tokenType) {
-        case TokenType::INTEGER_CONSTANT: {
+    switch (token.kind) {
+        case NTokenKind::INTEGER_CONSTANT: {
             int value = std::stoi(token.value);
             advance();
             return std::make_unique<IntegerLiteral>(value, token.line, token.column);
         }
         
-        case TokenType::CHAR_CONSTANT: {
+        case NTokenKind::CHAR_CONSTANT: {
             char value = token.value[0];
             advance();
             return std::make_unique<CharLiteral>(value, token.line, token.column);
         }
         
-        case TokenType::IDENTIFIER: {
+        case NTokenKind::IDENTIFIER: {
             std::string name = token.value;
             int line = token.line;
             int column = token.column;
             advance();
             
             // 检查是否是函数调用
-            if (currentToken().type == TokenType::DELIMITER_LPAREN) {
+            if (currentToken().kind == NTokenKind::DELIMITER_LPAREN) {
                 return parseCall(name);
             }
             
             return std::make_unique<IdentifierExpr>(name, line, column);
         }
         
-        case TokenType::DELIMITER_LPAREN: {
+        case NTokenKind::DELIMITER_LPAREN: {
             advance();
             auto expr = parseExpression();
-            expect(TokenType::DELIMITER_RPAREN);
+            expect(NTokenKind::DELIMITER_RPAREN);
             return expr;
         }
         
@@ -569,15 +609,15 @@ std::unique_ptr<Expr> Parser::parseCall(const std::string& callee) {
     Token token = currentToken();
     auto callExpr = std::make_unique<CallExpr>(callee, token.line, token.column);
     
-    expect(TokenType::DELIMITER_LPAREN);
+    expect(NTokenKind::DELIMITER_LPAREN);
     
-    if (currentToken().tokenType != TokenType::DELIMITER_RPAREN) {
+    if (currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
         do {
             callExpr->arguments.push_back(parseExpression());
-        } while (match(TokenType::DELIMITER_COMMA));
+        } while (match(NTokenKind::DELIMITER_COMMA));
     }
     
-    expect(TokenType::DELIMITER_RPAREN);
+    expect(NTokenKind::DELIMITER_RPAREN);
     
     return callExpr;
 }

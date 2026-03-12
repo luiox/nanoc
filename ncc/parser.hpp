@@ -1,8 +1,8 @@
 #ifndef NCC_PARSER_H
 #define NCC_PARSER_H
 
-#include "lexer.h"
-#include "ast.h"
+#include "lexer.hpp"
+#include "ast.hpp"
 #include <memory>
 #include <vector>
 
@@ -21,14 +21,15 @@ private:
     Token currentToken() const;
     Token peekToken() const;
     void advance();
-    bool match(TokenType type);
-    bool expect(TokenType type);
+    bool match(NTokenKind kind);
+    bool expect(NTokenKind kind);
     
     // 解析函数
     std::unique_ptr<Decl> parseDeclaration();
     std::unique_ptr<VarDeclaration> parseVarDeclaration();
     std::unique_ptr<FuncDeclaration> parseFuncDeclaration();
     std::unique_ptr<Stmt> parseStatement();
+    std::unique_ptr<Stmt> parseVarDeclarationStmt();
     std::unique_ptr<CompoundStmt> parseCompoundStatement();
     std::unique_ptr<IfStmt> parseIfStatement();
     std::unique_ptr<WhileStmt> parseWhileStatement();
