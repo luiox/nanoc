@@ -1,7 +1,6 @@
 #include <stdio.h>
 
-int
-main(int argc, char * argv[])
+int main(int argc, char * argv[])
 {
     int age = 45;
     if (age >= 17 + 8 + 20) {
