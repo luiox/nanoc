@@ -44,6 +44,17 @@ target("tests")
     add_files("ncc/ast.cpp")
     add_packages("gtest", "spdlog")
 
+-- 编译示例程序
+target("compile_examples")
+    set_kind("binary")
+    add_includedirs("ncc")
+    add_files("examples/compile_examples.cpp")
+    add_files("ncc/lexer.cpp")
+    add_files("ncc/parser.cpp")
+    add_files("ncc/codegen.cpp")
+    add_files("ncc/ast.cpp")
+    add_packages("spdlog")
+
 --
 -- If you want to known more usage about xmake, please see https://xmake.io
 --
