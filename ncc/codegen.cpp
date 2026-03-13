@@ -64,10 +64,32 @@ void CodeGenerator::popRegister(int reg) {
 }
 
 int CodeGenerator::evaluateExpression(Expr& expr) {
-    // 简化的表达式求值（仅支持整数字面量）
+    // 简化的表达式求值
     if (expr.type == ASTNodeType::INTEGER_LITERAL) {
         auto& literal = static_cast<IntegerLiteral&>(expr);
         return literal.value;
+    }
+    if (expr.type == ASTNodeType::CHAR_LITERAL) {
+        auto& literal = static_cast<CharLiteral&>(expr);
+        return static_cast<int>(literal.value);
+    }
+    if (expr.type == ASTNodeType::BINARY_EXPR) {
+        auto& binary = static_cast<BinaryExpr&>(expr);
+        int left = evaluateExpression(*binary.left);
+        int right = evaluateExpression(*binary.right);
+        if (binary.op == "+") return left + right;
+        if (binary.op == "-") return left - right;
+        if (binary.op == "*") return left * right;
+        if (binary.op == "/") return left / right;
+        if (binary.op == "%") return left % right;
+        throw std::runtime_error("Unsupported binary operator in compile-time evaluation: " + binary.op);
+    }
+    if (expr.type == ASTNodeType::UNARY_EXPR) {
+        auto& unary = static_cast<UnaryExpr&>(expr);
+        int operand = evaluateExpression(*unary.operand);
+        if (unary.op == "-") return -operand;
+        if (unary.op == "!") return !operand;
+        throw std::runtime_error("Unsupported unary operator in compile-time evaluation: " + unary.op);
     }
     throw std::runtime_error("Cannot evaluate expression at compile time");
 }
