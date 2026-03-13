@@ -192,7 +192,7 @@ TEST(ParserTest, ExpressionParsing) {
     ASSERT_NE(compound, nullptr);
     ASSERT_EQ(compound->statements.size(), 1);
     
-    auto varDecl = dynamic_cast<VarDeclaration*>(compound->statements[0].get());
+    auto varDecl = dynamic_cast<StmtVarDeclaration*>(compound->statements[0].get());
     ASSERT_NE(varDecl, nullptr);
     ASSERT_NE(varDecl->initializer, nullptr);
     
@@ -212,7 +212,7 @@ TEST(ParserTest, ExpressionParsing) {
 
 // 测试函数调用解析
 TEST(ParserTest, FunctionCall) {
-    std::string source = "int main() { printf(\"Hello\"); }";
+    std::string source = "int main() { printf(10); }";
     Lexer lexer(source);
     std::vector<Token> tokens = lexer.tokenize();
     

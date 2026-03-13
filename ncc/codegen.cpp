@@ -147,12 +147,11 @@ void CodeGenerator::visit(VarDeclaration& node) {
     
     // 如果有初始化表达式
     if (node.initializer) {
-        // 计算初始化值
-        int value = evaluateExpression(*node.initializer);
-        
-        // 生成初始化代码
         emit("    ; Initialize variable " + node.name);
-        emit("    lmm R0, " + std::to_string(value));
+        
+        // 生成运行时代码来计算表达式
+        node.initializer->accept(*this);
+        emit("    pop R0");
         emit("    st R0, [BP-" + std::to_string(symbol.offset) + "]");
     }
 }
@@ -523,12 +522,11 @@ void CodeGenerator::visit(StmtVarDeclaration& node) {
     
     // 如果有初始化表达式
     if (node.initializer) {
-        // 计算初始化值
-        int value = evaluateExpression(*node.initializer);
-        
-        // 生成初始化代码
         emit("    ; Initialize variable " + node.name);
-        emit("    lmm R0, " + std::to_string(value));
+        
+        // 生成运行时代码来计算表达式
+        node.initializer->accept(*this);
+        emit("    pop R0");
         emit("    st R0, [BP-" + std::to_string(symbol.offset) + "]");
     }
 }

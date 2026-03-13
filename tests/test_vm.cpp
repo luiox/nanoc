@@ -254,24 +254,28 @@ TEST(VMTest, JumpInstructions) {
     std::string testFile = "test_jump.nca";
     std::ofstream ofs(testFile, std::ios::binary);
     
-    // jmp 12 (opcode=22, target=12)
+    // jmp 11 (opcode=22, target=11) - 跳过第一条LMM指令
+    // 位置0-4: jmp指令(5字节)
+    // 位置5-10: LMM R0, 999 (6字节)
+    // 位置11-16: LMM R0, 100 (6字节)
+    // 位置17-18: trap (2字节)
     ofs.put(0x16); // JMP opcode
-    int32_t target = 12;
+    int32_t target = 11; // 跳到第二条LMM指令
     ofs.write(reinterpret_cast<const char*>(&target), sizeof(target));
     
-    // 这里应该被跳过
+    // 这里应该被跳过 (位置5-10)
     ofs.put(0x00); // LMM opcode
     ofs.put(0x00); // R0
     int32_t value1 = 999;
     ofs.write(reinterpret_cast<const char*>(&value1), sizeof(value1));
     
-    // lmm R0, 100 (opcode=0, reg=0, value=100)
+    // lmm R0, 100 (opcode=0, reg=0, value=100) (位置11-16)
     ofs.put(0x00); // LMM opcode
     ofs.put(0x00); // R0
     int32_t value2 = 100;
     ofs.write(reinterpret_cast<const char*>(&value2), sizeof(value2));
     
-    // trap 0 (opcode=26, type=2 for HALT)
+    // trap 0 (opcode=26, type=2 for HALT) (位置17-18)
     ofs.put(0x1A); // TRAP opcode
     ofs.put(0x02); // HALT type
     
@@ -284,7 +288,7 @@ TEST(VMTest, JumpInstructions) {
     vm.start();
     std::string output = testing::internal::GetCapturedStdout();
     
-    EXPECT_TRUE(output.find("JMP: target=12") != std::string::npos);
+    EXPECT_TRUE(output.find("JMP: target=11") != std::string::npos);
     EXPECT_TRUE(output.find("LMM: R0 = 100") != std::string::npos);
     EXPECT_TRUE(output.find("LMM: R0 = 999") == std::string::npos); // 应该被跳过
     
