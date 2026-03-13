@@ -94,7 +94,7 @@ private:
 class NInstructionsST : public NInstructionsInterface
 {
 public:
-    NInstructionsST();
+    NInstructionsST(NRegister reg, int32_t val);
     ~NInstructionsST() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -104,12 +104,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsLEA : public NInstructionsInterface
 {
 public:
-    NInstructionsLEA();
+    NInstructionsLEA(NRegister reg, int32_t val);
     ~NInstructionsLEA() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -119,6 +121,8 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsADD : public NInstructionsInterface
@@ -158,7 +162,7 @@ private:
 class NInstructionsMUL : public NInstructionsInterface
 {
 public:
-    NInstructionsMUL();
+    NInstructionsMUL(NRegister reg, int32_t val);
     ~NInstructionsMUL() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -168,12 +172,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsDIV : public NInstructionsInterface
 {
 public:
-    NInstructionsDIV();
+    NInstructionsDIV(NRegister reg, int32_t val);
     ~NInstructionsDIV() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -183,12 +189,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsMOD : public NInstructionsInterface
 {
 public:
-    NInstructionsMOD();
+    NInstructionsMOD(NRegister reg, int32_t val);
     ~NInstructionsMOD() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -198,12 +206,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsNOT : public NInstructionsInterface
 {
 public:
-    NInstructionsNOT();
+    NInstructionsNOT(NRegister reg);
     ~NInstructionsNOT() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -213,12 +223,13 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
 };
 
 class NInstructionsAND : public NInstructionsInterface
 {
 public:
-    NInstructionsAND();
+    NInstructionsAND(NRegister reg, int32_t val);
     ~NInstructionsAND() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -228,12 +239,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsOR : public NInstructionsInterface
 {
 public:
-    NInstructionsOR();
+    NInstructionsOR(NRegister reg, int32_t val);
     ~NInstructionsOR() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -243,12 +256,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsXOR : public NInstructionsInterface
 {
 public:
-    NInstructionsXOR();
+    NInstructionsXOR(NRegister reg, int32_t val);
     ~NInstructionsXOR() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -258,12 +273,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsSHL : public NInstructionsInterface
 {
 public:
-    NInstructionsSHL();
+    NInstructionsSHL(NRegister reg, int32_t val);
     ~NInstructionsSHL() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -273,12 +290,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsSHR : public NInstructionsInterface
 {
 public:
-    NInstructionsSHR();
+    NInstructionsSHR(NRegister reg, int32_t val);
     ~NInstructionsSHR() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -288,12 +307,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsEQ : public NInstructionsInterface
 {
 public:
-    NInstructionsEQ();
+    NInstructionsEQ(NRegister reg, int32_t val);
     ~NInstructionsEQ() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -303,12 +324,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsNE : public NInstructionsInterface
 {
 public:
-    NInstructionsNE();
+    NInstructionsNE(NRegister reg, int32_t val);
     ~NInstructionsNE() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -318,12 +341,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsLT : public NInstructionsInterface
 {
 public:
-    NInstructionsLT();
+    NInstructionsLT(NRegister reg, int32_t val);
     ~NInstructionsLT() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -333,12 +358,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsLE : public NInstructionsInterface
 {
 public:
-    NInstructionsLE();
+    NInstructionsLE(NRegister reg, int32_t val);
     ~NInstructionsLE() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -348,12 +375,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsGT : public NInstructionsInterface
 {
 public:
-    NInstructionsGT();
+    NInstructionsGT(NRegister reg, int32_t val);
     ~NInstructionsGT() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -363,12 +392,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsGE : public NInstructionsInterface
 {
 public:
-    NInstructionsGE();
+    NInstructionsGE(NRegister reg, int32_t val);
     ~NInstructionsGE() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -378,12 +409,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsPUSH : public NInstructionsInterface
 {
 public:
-    NInstructionsPUSH();
+    NInstructionsPUSH(NRegister reg);
     ~NInstructionsPUSH() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -393,12 +426,13 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
 };
 
 class NInstructionsPOP : public NInstructionsInterface
 {
 public:
-    NInstructionsPOP();
+    NInstructionsPOP(NRegister reg);
     ~NInstructionsPOP() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -408,12 +442,13 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
 };
 
 class NInstructionsJMP : public NInstructionsInterface
 {
 public:
-    NInstructionsJMP();
+    NInstructionsJMP(std::string target);
     ~NInstructionsJMP() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -423,12 +458,13 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    std::string m_target;
 };
 
 class NInstructionsJIC : public NInstructionsInterface
 {
 public:
-    NInstructionsJIC();
+    NInstructionsJIC(std::string target);
     ~NInstructionsJIC() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -438,6 +474,7 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    std::string m_target;
 };
 
 class NInstructionsCALL : public NInstructionsInterface
@@ -474,7 +511,7 @@ private:
 class NInstructionsTRAP : public NInstructionsInterface
 {
 public:
-    NInstructionsTRAP();
+    NInstructionsTRAP(NTrapType type);
     ~NInstructionsTRAP() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -484,6 +521,7 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NTrapType m_type;
 };
 
 extern std::map<std::string, NRegister> g_textToRegisterMap;

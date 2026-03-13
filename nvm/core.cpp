@@ -37,19 +37,69 @@ NVirtualMachine::load(std::string filename)
     // 计算文件大小
     fseek(pf, 0, SEEK_END);
     int64_t file_size = ftell(pf);
-    m_codeSize = file_size;
-
-    // 申请内存
-    m_code = static_cast<int8_t *>(malloc(file_size));
-    if (m_code == NULL) {
+    
+    // 分配内存并读取整个文件
+    int8_t* file_data = static_cast<int8_t *>(malloc(file_size));
+    if (file_data == NULL) {
         printf("Error: Cannot allocate memory for file %s\n", filename.c_str());
+        fclose(pf);
         exit(EXIT_FAILURE);
     }
-
-    // 将文件内容全部读入
+    
     fseek(pf, 0, SEEK_SET);
-    fread(m_code, sizeof(int8_t), file_size, pf);
+    fread(file_data, sizeof(int8_t), file_size, pf);
     fclose(pf);
+    
+    // 检查是否是NCO格式（有文件头）
+    if (file_size >= 16 && 
+        file_data[0] == 'N' && file_data[1] == 'C' && 
+        file_data[2] == 'O' && file_data[3] == '\0') {
+        // NCO格式：解析文件头
+        printf("Loading NCO format bytecode...\n");
+        
+        // 读取代码段大小
+        int32_t code_size = 
+            (static_cast<int32_t>(file_data[8]) << 0) |
+            (static_cast<int32_t>(file_data[9]) << 8) |
+            (static_cast<int32_t>(file_data[10]) << 16) |
+            (static_cast<int32_t>(file_data[11]) << 24);
+        
+        // 读取入口点偏移
+        int32_t entry_point = 
+            (static_cast<int32_t>(file_data[12]) << 0) |
+            (static_cast<int32_t>(file_data[13]) << 8) |
+            (static_cast<int32_t>(file_data[14]) << 16) |
+            (static_cast<int32_t>(file_data[15]) << 24);
+        
+        printf("Code size: %d bytes, Entry point: %d\n", code_size, entry_point);
+        
+        // 分配代码内存
+        m_codeSize = code_size;
+        m_code = static_cast<int8_t *>(malloc(code_size));
+        if (m_code == NULL) {
+            printf("Error: Cannot allocate memory for code\n");
+            free(file_data);
+            exit(EXIT_FAILURE);
+        }
+        
+        // 复制代码段（跳过16字节文件头）
+        memcpy(m_code, file_data + 16, code_size);
+        
+        // 设置PC到入口点
+        m_pc = entry_point;
+        
+    } else {
+        // 原始二进制格式（向后兼容）
+        printf("Loading raw binary format...\n");
+        m_codeSize = file_size;
+        m_code = file_data;
+        file_data = nullptr; // 防止重复释放
+        m_pc = 0;
+    }
+    
+    if (file_data) {
+        free(file_data);
+    }
 }
 
 // 指令处理函数实现
