@@ -8,92 +8,92 @@
 #include <vector>
 
 // ============================================================================
-// NanoC NCI v2.1 指令集定义
-// 设计原则：极简主义，无系统调用，所有功能通过 C 函数实现
+// NanoC NCI v2.1 Instruction Set Definition
+// Design Principle: Minimalist, no system calls, all functionality via C functions
 // ============================================================================
 
 // ----------------------------------------------------------------------------
-// 寄存器定义（8 个通用寄存器）
+// Register Definition (8 general-purpose registers)
 // ----------------------------------------------------------------------------
 enum class NRegister {
-    R0 = 0, // AX - 返回值、参数 1
-    R1,     // BX - 参数 2
-    R2,     // CX - 参数 3
-    R3,     // DX - 参数 4
-    R4,     // SP - 栈指针（专用）
-    R5,     // BP - 基址指针（专用）
-    R6,     // 通用
-    R7,     // 通用
+    R0 = 0, // AX - return value, param 1
+    R1,     // BX - param 2
+    R2,     // CX - param 3
+    R3,     // DX - param 4
+    R4,     // SP - stack pointer (dedicated)
+    R5,     // BP - base pointer (dedicated)
+    R6,     // general purpose
+    R7,     // general purpose
 };
 
 // ----------------------------------------------------------------------------
-// 操作码定义（NCI v2.1）
-// 编码规则：按功能分组，每组 16 个操作码空间
+// Opcode Definition (NCI v2.1)
+// Encoding: Grouped by function, 16 opcodes per group
 // ----------------------------------------------------------------------------
 enum class NOpcode : uint8_t {
-    // 内存访问指令 (0x00-0x0F)
-    LMM = 0x00,    // Load Memory to Register (立即数→寄存器)
-    ST = 0x01,     // Store (寄存器→直接地址)
+    // Memory access instructions (0x00-0x0F)
+    LMM = 0x00,    // Load Memory to Register (immediate to register)
+    ST = 0x01,     // Store (register to direct address)
     LEA = 0x02,    // Load Effective Address
-    LOAD = 0x03,   // Load (间接寻址：R1=[R2])
-    STORE = 0x04,  // Store (间接寻址：[R1]=R2)
-    LOADA = 0x05,  // Load Absolute (绝对地址→寄存器)
-    STOREA = 0x06, // Store Absolute (寄存器→绝对地址)
+    LOAD = 0x03,   // Load (indirect: R1=[R2])
+    STORE = 0x04,  // Store (indirect: [R1]=R2)
+    LOADA = 0x05,  // Load Absolute (absolute address to register)
+    STOREA = 0x06, // Store Absolute (register to absolute address)
 
-    // 算术运算指令 (0x10-0x1F)
-    ADD = 0x10,  // 加法（寄存器）
-    ADDI = 0x11, // 加法（立即数）
-    SUB = 0x12,  // 减法（寄存器）
-    SUBI = 0x13, // 减法（立即数）
-    MUL = 0x14,  // 乘法（寄存器）
-    MULI = 0x15, // 乘法（立即数）
-    DIV = 0x16,  // 除法（寄存器）
-    DIVI = 0x17, // 除法（立即数）
-    MOD = 0x18,  // 取模（寄存器）
-    MODI = 0x19, // 取模（立即数）
-    NOT = 0x1A,  // 按位取反
-    NEG = 0x1B,  // 算术取负
+    // Arithmetic instructions (0x10-0x1F)
+    ADD = 0x10,  // Add (register)
+    ADDI = 0x11, // Add (immediate)
+    SUB = 0x12,  // Subtract (register)
+    SUBI = 0x13, // Subtract (immediate)
+    MUL = 0x14,  // Multiply (register)
+    MULI = 0x15, // Multiply (immediate)
+    DIV = 0x16,  // Divide (register)
+    DIVI = 0x17, // Divide (immediate)
+    MOD = 0x18,  // Modulo (register)
+    MODI = 0x19, // Modulo (immediate)
+    NOT = 0x1A,  // Bitwise NOT
+    NEG = 0x1B,  // Arithmetic NEG
 
-    // 逻辑运算指令 (0x20-0x2F)
-    AND = 0x20,  // 按位与（寄存器）
-    ANDI = 0x21, // 按位与（立即数）
-    OR = 0x22,   // 按位或（寄存器）
-    ORI = 0x23,  // 按位或（立即数）
-    XOR = 0x24,  // 按位异或（寄存器）
-    XORI = 0x25, // 按位异或（立即数）
-    SHL = 0x26,  // 逻辑左移（寄存器）
-    SHLI = 0x27, // 逻辑左移（8 位立即数）
-    SHR = 0x28,  // 逻辑右移（寄存器）
-    SHRI = 0x29, // 逻辑右移（8 位立即数）
+    // Logic instructions (0x20-0x2F)
+    AND = 0x20,  // Bitwise AND (register)
+    ANDI = 0x21, // Bitwise AND (immediate)
+    OR = 0x22,   // Bitwise OR (register)
+    ORI = 0x23,  // Bitwise OR (immediate)
+    XOR = 0x24,  // Bitwise XOR (register)
+    XORI = 0x25, // Bitwise XOR (immediate)
+    SHL = 0x26,  // Shift Left (register)
+    SHLI = 0x27, // Shift Left (8-bit immediate)
+    SHR = 0x28,  // Shift Right (register)
+    SHRI = 0x29, // Shift Right (8-bit immediate)
 
-    // 比较指令 (0x30-0x3F)
-    CMP = 0x30,  // 比较（寄存器）
-    CMPI = 0x31, // 比较（立即数）
-    TEST = 0x32, // 位测试
+    // Compare instructions (0x30-0x3F)
+    CMP = 0x30,  // Compare (register)
+    CMPI = 0x31, // Compare (immediate)
+    TEST = 0x32, // Bit test
 
-    // 栈操作指令 (0x40-0x4F)
-    PUSH = 0x40,  // 压栈（寄存器）
-    PUSHI = 0x41, // 压栈（立即数）
-    POP = 0x42,   // 出栈
-    ENTER = 0x43, // 建立栈帧
-    LEAVE = 0x44, // 清理栈帧
+    // Stack instructions (0x40-0x4F)
+    PUSH = 0x40,  // Push to stack (register)
+    PUSHI = 0x41, // Push to stack (immediate)
+    POP = 0x42,   // Pop from stack
+    ENTER = 0x43, // Enter stack frame
+    LEAVE = 0x44, // Leave stack frame
 
-    // 控制流指令 (0x50-0x5F)
-    JMP = 0x50, // 无条件跳转
-    JZ = 0x51,  // 为 0 跳转（Z=1）
-    JNZ = 0x52, // 非 0 跳转（Z=0）
-    JN = 0x53,  // 为负跳转（N=1）
-    JP = 0x54,  // 为正跳转（P=1）
+    // Control flow instructions (0x50-0x5F)
+    JMP = 0x50, // Unconditional jump
+    JZ = 0x51,  // Jump if zero (Z=1)
+    JNZ = 0x52, // Jump if not zero (Z=0)
+    JN = 0x53,  // Jump if negative (N=1)
+    JP = 0x54,  // Jump if positive (P=1)
 
-    // 函数调用指令 (0x60-0x6F)
-    CALL = 0x60,  // 内部调用
-    CALLX = 0x61, // 外部调用
-    RET = 0x62,   // 返回
+    // Function call instructions (0x60-0x6F)
+    CALL = 0x60,  // Call internal function
+    CALLX = 0x61, // Call external function
+    RET = 0x62,   // Return
 
-    // 寄存器操作指令 (0x70-0x7F)
-    MOV = 0x70, // 寄存器间移动
-    CLR = 0x71, // 清零
-    NOP = 0x7F, // 空操作
+    // Register instructions (0x70-0x7F)
+    MOV = 0x70, // Move between registers
+    CLR = 0x71, // Clear register
+    NOP = 0x7F, // No operation
 };
 
 // ----------------------------------------------------------------------------
