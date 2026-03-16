@@ -658,7 +658,7 @@ NVirtualMachine::executeRET()
 }
 
 void
-NVirtualMachine::run()
+NVirtualMachine::start()
 {
     if (m_code == NULL || m_stack == NULL) {
         printf("Error: Code or stack not initialized\n");
@@ -714,76 +714,6 @@ NVirtualMachine::run()
     }
 
     printf("VM execution finished\n");
-}
-
-m_pc += 2;
-}
-else
-{
-    printf("Error: TRAP instruction out of bounds\n");
-}
-}
-
-void
-NVirtualMachine::start()
-{
-    if (m_code == NULL || m_stack == NULL) {
-        printf("Error: Code or stack not initialized\n");
-        return;
-    }
-
-    printf("Starting virtual machine...\n");
-
-    // 指令处理函数表
-    typedef void (NVirtualMachine::*InstructionHandler)();
-    static const InstructionHandler handlers[] = {
-        &NVirtualMachine::executeLMM,  // 0
-        &NVirtualMachine::executeST,   // 1
-        &NVirtualMachine::executeLEA,  // 2
-        &NVirtualMachine::executeADD,  // 3
-        &NVirtualMachine::executeSUB,  // 4
-        &NVirtualMachine::executeMUL,  // 5
-        &NVirtualMachine::executeDIV,  // 6
-        &NVirtualMachine::executeMOD,  // 7
-        &NVirtualMachine::executeNOT,  // 8
-        &NVirtualMachine::executeAND,  // 9
-        &NVirtualMachine::executeOR,   // 10
-        &NVirtualMachine::executeXOR,  // 11
-        &NVirtualMachine::executeSHL,  // 12
-        &NVirtualMachine::executeSHR,  // 13
-        &NVirtualMachine::executeEQ,   // 14
-        &NVirtualMachine::executeNE,   // 15
-        &NVirtualMachine::executeLT,   // 16
-        &NVirtualMachine::executeLE,   // 17
-        &NVirtualMachine::executeGT,   // 18
-        &NVirtualMachine::executeGE,   // 19
-        &NVirtualMachine::executePUSH, // 20
-        &NVirtualMachine::executePOP,  // 21
-        &NVirtualMachine::executeJMP,  // 22
-        &NVirtualMachine::executeJIC,  // 23
-        &NVirtualMachine::executeCALL, // 24
-        &NVirtualMachine::executeRET   // 25
-    };
-
-    // 指令执行循环
-    while (m_pc < m_codeSize) {
-        // 读取操作码
-        uint8_t opcode = static_cast<uint8_t>(m_code[m_pc]);
-
-        printf("PC: %d, Opcode: 0x%02X\n", m_pc, opcode);
-
-        // 检查操作码是否有效
-        if (opcode >= sizeof(handlers) / sizeof(handlers[0])) {
-            printf("Error: Unknown opcode: 0x%02X\n", opcode);
-            m_pc++;
-            continue;
-        }
-
-        // 调用对应的处理函数
-        (this->*handlers[opcode])();
-    }
-
-    printf("Program execution completed\n");
 }
 
 void

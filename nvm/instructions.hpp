@@ -205,8 +205,7 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
-    NRegister m_dest; // 目标地址寄存器
-    NRegister m_src;  // 源数据寄存器
+    NRegister dest, src;
 };
 
 // ============================================================================
