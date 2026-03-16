@@ -24,13 +24,12 @@ parseRegister(const std::string & str)
 {
     std::string reg = str;
     trim(reg);
-    // 转换为大写
     std::transform(reg.begin(), reg.end(), reg.begin(), ::toupper);
     auto it = g_textToRegisterMap.find(reg);
     if (it != g_textToRegisterMap.end()) {
         return it->second;
     }
-    return NRegister::R0; // 默认
+    return NRegister::R0;
 }
 
 // 辅助函数：解析 32 位立即数
@@ -78,7 +77,7 @@ parseInt8(const std::string & str, int8_t & out)
     return true;
 }
 
-// 辅助函数：写入 32 位值到字节向量（小端序）
+// 辅助函数：写入 32 位值（小端序）
 static void
 writeInt32(std::vector<uint8_t> & code, int32_t val)
 {
@@ -88,7 +87,7 @@ writeInt32(std::vector<uint8_t> & code, int32_t val)
     code.push_back(static_cast<uint8_t>((val >> 24) & 0xFF));
 }
 
-// 辅助函数：写入 16 位值到字节向量（小端序）
+// 辅助函数：写入 16 位值（小端序）
 static void
 writeInt16(std::vector<uint8_t> & code, int16_t val)
 {

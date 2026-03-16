@@ -112,16 +112,9 @@ public:
     NInstructionsInterface() = default;
     virtual ~NInstructionsInterface() = default;
 
-    // 生成二进制代码
     virtual std::vector<uint8_t> generateInstructionCode() = 0;
-
-    // 生成指令名称（用于反汇编）
     virtual std::string generateInstructionName() = 0;
-
-    // 从文本解析指令
     static NInstructionsInterface * parserInstructionText(std::string & text);
-
-    // 获取操作码
     NOpcode
     getOpcode() const
     {

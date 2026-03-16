@@ -17,7 +17,7 @@ NVirtualMachine::NVirtualMachine(int32_t stackSize)
     m_code = NULL;
     m_pc = 0;
     m_sp = stackSize; // 栈指针初始化为栈顶
-    
+
     // 初始化寄存器
     for (int i = 0; i < 8; i++) {
         m_registers[i] = 0;
@@ -37,42 +37,39 @@ NVirtualMachine::load(std::string filename)
     // 计算文件大小
     fseek(pf, 0, SEEK_END);
     int64_t file_size = ftell(pf);
-    
+
     // 分配内存并读取整个文件
-    int8_t* file_data = static_cast<int8_t *>(malloc(file_size));
+    int8_t * file_data = static_cast<int8_t *>(malloc(file_size));
     if (file_data == NULL) {
         printf("Error: Cannot allocate memory for file %s\n", filename.c_str());
         fclose(pf);
         exit(EXIT_FAILURE);
     }
-    
+
     fseek(pf, 0, SEEK_SET);
     fread(file_data, sizeof(int8_t), file_size, pf);
     fclose(pf);
-    
+
     // 检查是否是NCO格式（有文件头）
-    if (file_size >= 16 && 
-        file_data[0] == 'N' && file_data[1] == 'C' && 
-        file_data[2] == 'O' && file_data[3] == '\0') {
+    if (file_size >= 16 && file_data[0] == 'N' && file_data[1] == 'C'
+        && file_data[2] == 'O' && file_data[3] == '\0') {
         // NCO格式：解析文件头
         printf("Loading NCO format bytecode...\n");
-        
+
         // 读取代码段大小
-        int32_t code_size = 
-            (static_cast<int32_t>(file_data[8]) << 0) |
-            (static_cast<int32_t>(file_data[9]) << 8) |
-            (static_cast<int32_t>(file_data[10]) << 16) |
-            (static_cast<int32_t>(file_data[11]) << 24);
-        
+        int32_t code_size = (static_cast<int32_t>(file_data[8]) << 0)
+                            | (static_cast<int32_t>(file_data[9]) << 8)
+                            | (static_cast<int32_t>(file_data[10]) << 16)
+                            | (static_cast<int32_t>(file_data[11]) << 24);
+
         // 读取入口点偏移
-        int32_t entry_point = 
-            (static_cast<int32_t>(file_data[12]) << 0) |
-            (static_cast<int32_t>(file_data[13]) << 8) |
-            (static_cast<int32_t>(file_data[14]) << 16) |
-            (static_cast<int32_t>(file_data[15]) << 24);
-        
+        int32_t entry_point = (static_cast<int32_t>(file_data[12]) << 0)
+                              | (static_cast<int32_t>(file_data[13]) << 8)
+                              | (static_cast<int32_t>(file_data[14]) << 16)
+                              | (static_cast<int32_t>(file_data[15]) << 24);
+
         printf("Code size: %d bytes, Entry point: %d\n", code_size, entry_point);
-        
+
         // 分配代码内存
         m_codeSize = code_size;
         m_code = static_cast<int8_t *>(malloc(code_size));
@@ -81,14 +78,14 @@ NVirtualMachine::load(std::string filename)
             free(file_data);
             exit(EXIT_FAILURE);
         }
-        
+
         // 复制代码段（跳过16字节文件头）
         memcpy(m_code, file_data + 16, code_size);
-        
+
         // 设置PC到入口点
         m_pc = entry_point;
-        
-    } else {
+    }
+    else {
         // 原始二进制格式（向后兼容）
         printf("Loading raw binary format...\n");
         m_codeSize = file_size;
@@ -96,7 +93,7 @@ NVirtualMachine::load(std::string filename)
         file_data = nullptr; // 防止重复释放
         m_pc = 0;
     }
-    
+
     if (file_data) {
         free(file_data);
     }
@@ -110,15 +107,16 @@ NVirtualMachine::executeLMM()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] = value;
             printf("LMM: R%d = %d\n", reg, value);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: LMM instruction out of bounds\n");
     }
 }
@@ -130,15 +128,16 @@ NVirtualMachine::executeST()
     // 格式：opcode(1) + register(1) + address(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t addr = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t addr = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8 && addr >= 0 && addr < m_stackSize) {
-            *reinterpret_cast<int32_t*>(&m_stack[addr]) = m_registers[reg];
+            *reinterpret_cast<int32_t *>(&m_stack[addr]) = m_registers[reg];
             printf("ST: mem[%d] = R%d (%d)\n", addr, reg, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: ST instruction out of bounds\n");
     }
 }
@@ -150,15 +149,16 @@ NVirtualMachine::executeLEA()
     // 格式：opcode(1) + register(1) + address(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t addr = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t addr = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] = addr;
             printf("LEA: R%d = %d\n", reg, addr);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: LEA instruction out of bounds\n");
     }
 }
@@ -170,15 +170,16 @@ NVirtualMachine::executeADD()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] += value;
             printf("ADD: R%d += %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: ADD instruction out of bounds\n");
     }
 }
@@ -190,15 +191,16 @@ NVirtualMachine::executeSUB()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] -= value;
             printf("SUB: R%d -= %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: SUB instruction out of bounds\n");
     }
 }
@@ -210,15 +212,16 @@ NVirtualMachine::executeMUL()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] *= value;
             printf("MUL: R%d *= %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: MUL instruction out of bounds\n");
     }
 }
@@ -230,8 +233,8 @@ NVirtualMachine::executeDIV()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             if (value == 0) {
                 printf("Error: Division by zero\n");
@@ -240,9 +243,10 @@ NVirtualMachine::executeDIV()
             m_registers[reg] /= value;
             printf("DIV: R%d /= %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: DIV instruction out of bounds\n");
     }
 }
@@ -254,8 +258,8 @@ NVirtualMachine::executeMOD()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             if (value == 0) {
                 printf("Error: Modulo by zero\n");
@@ -264,9 +268,10 @@ NVirtualMachine::executeMOD()
             m_registers[reg] %= value;
             printf("MOD: R%d %%= %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: MOD instruction out of bounds\n");
     }
 }
@@ -278,14 +283,15 @@ NVirtualMachine::executeNOT()
     // 格式：opcode(1) + register(1)
     if (m_pc + 2 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        
+
         if (reg < 8) {
             m_registers[reg] = ~m_registers[reg];
             printf("NOT: R%d = ~R%d (result: %d)\n", reg, reg, m_registers[reg]);
         }
-        
+
         m_pc += 2;
-    } else {
+    }
+    else {
         printf("Error: NOT instruction out of bounds\n");
     }
 }
@@ -297,15 +303,16 @@ NVirtualMachine::executeAND()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] &= value;
             printf("AND: R%d &= %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: AND instruction out of bounds\n");
     }
 }
@@ -317,15 +324,16 @@ NVirtualMachine::executeOR()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] |= value;
             printf("OR: R%d |= %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: OR instruction out of bounds\n");
     }
 }
@@ -337,15 +345,16 @@ NVirtualMachine::executeXOR()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] ^= value;
             printf("XOR: R%d ^= %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: XOR instruction out of bounds\n");
     }
 }
@@ -357,15 +366,16 @@ NVirtualMachine::executeSHL()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] <<= value;
             printf("SHL: R%d <<= %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: SHL instruction out of bounds\n");
     }
 }
@@ -377,15 +387,16 @@ NVirtualMachine::executeSHR()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_registers[reg] >>= value;
             printf("SHR: R%d >>= %d (result: %d)\n", reg, value, m_registers[reg]);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: SHR instruction out of bounds\n");
     }
 }
@@ -397,15 +408,16 @@ NVirtualMachine::executeEQ()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_flags = (m_registers[reg] == value) ? 1 : 0;
             printf("EQ: R%d == %d (result: %d)\n", reg, value, m_flags);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: EQ instruction out of bounds\n");
     }
 }
@@ -417,15 +429,16 @@ NVirtualMachine::executeNE()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_flags = (m_registers[reg] != value) ? 1 : 0;
             printf("NE: R%d != %d (result: %d)\n", reg, value, m_flags);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: NE instruction out of bounds\n");
     }
 }
@@ -437,15 +450,16 @@ NVirtualMachine::executeLT()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_flags = (m_registers[reg] < value) ? 1 : 0;
             printf("LT: R%d < %d (result: %d)\n", reg, value, m_flags);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: LT instruction out of bounds\n");
     }
 }
@@ -457,15 +471,16 @@ NVirtualMachine::executeLE()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_flags = (m_registers[reg] <= value) ? 1 : 0;
             printf("LE: R%d <= %d (result: %d)\n", reg, value, m_flags);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: LE instruction out of bounds\n");
     }
 }
@@ -477,15 +492,16 @@ NVirtualMachine::executeGT()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_flags = (m_registers[reg] > value) ? 1 : 0;
             printf("GT: R%d > %d (result: %d)\n", reg, value, m_flags);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: GT instruction out of bounds\n");
     }
 }
@@ -497,15 +513,16 @@ NVirtualMachine::executeGE()
     // 格式：opcode(1) + register(1) + value(4)
     if (m_pc + 6 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        int32_t value = *reinterpret_cast<int32_t*>(&m_code[m_pc + 2]);
-        
+        int32_t value = *reinterpret_cast<int32_t *>(&m_code[m_pc + 2]);
+
         if (reg < 8) {
             m_flags = (m_registers[reg] >= value) ? 1 : 0;
             printf("GE: R%d >= %d (result: %d)\n", reg, value, m_flags);
         }
-        
+
         m_pc += 6;
-    } else {
+    }
+    else {
         printf("Error: GE instruction out of bounds\n");
     }
 }
@@ -517,15 +534,16 @@ NVirtualMachine::executePUSH()
     // 格式：opcode(1) + register(1)
     if (m_pc + 2 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        
+
         if (reg < 8) {
             m_sp -= 4;
-            *reinterpret_cast<int32_t*>(&m_stack[m_sp]) = m_registers[reg];
+            *reinterpret_cast<int32_t *>(&m_stack[m_sp]) = m_registers[reg];
             printf("PUSH: R%d (value: %d)\n", reg, m_registers[reg]);
         }
-        
+
         m_pc += 2;
-    } else {
+    }
+    else {
         printf("Error: PUSH instruction out of bounds\n");
     }
 }
@@ -537,19 +555,21 @@ NVirtualMachine::executePOP()
     // 格式：opcode(1) + register(1)
     if (m_pc + 2 <= m_codeSize) {
         uint8_t reg = static_cast<uint8_t>(m_code[m_pc + 1]);
-        
+
         if (reg < 8) {
             if (m_sp + 4 <= m_stackSize) {
-                m_registers[reg] = *reinterpret_cast<int32_t*>(&m_stack[m_sp]);
+                m_registers[reg] = *reinterpret_cast<int32_t *>(&m_stack[m_sp]);
                 m_sp += 4;
                 printf("POP: R%d (value: %d)\n", reg, m_registers[reg]);
-            } else {
+            }
+            else {
                 printf("Error: POP instruction - stack underflow\n");
             }
         }
-        
+
         m_pc += 2;
-    } else {
+    }
+    else {
         printf("Error: POP instruction out of bounds\n");
     }
 }
@@ -560,13 +580,14 @@ NVirtualMachine::executeJMP()
     // JMP指令：jmp target
     // 格式：opcode(1) + target(4)
     if (m_pc + 5 <= m_codeSize) {
-        int32_t target = *reinterpret_cast<int32_t*>(&m_code[m_pc + 1]);
-        
+        int32_t target = *reinterpret_cast<int32_t *>(&m_code[m_pc + 1]);
+
         printf("JMP: target=%d\n", target);
-        
+
         // 跳转到目标地址
         m_pc = target;
-    } else {
+    }
+    else {
         printf("Error: JMP instruction out of bounds\n");
     }
 }
@@ -577,17 +598,19 @@ NVirtualMachine::executeJIC()
     // JIC指令：jic target
     // 格式：opcode(1) + target(4)
     if (m_pc + 5 <= m_codeSize) {
-        int32_t target = *reinterpret_cast<int32_t*>(&m_code[m_pc + 1]);
-        
+        int32_t target = *reinterpret_cast<int32_t *>(&m_code[m_pc + 1]);
+
         printf("JIC: target=%d, flags=%d\n", target, m_flags);
-        
+
         // 条件跳转：如果flags为1则跳转
         if (m_flags) {
             m_pc = target;
-        } else {
+        }
+        else {
             m_pc += 5;
         }
-    } else {
+    }
+    else {
         printf("Error: JIC instruction out of bounds\n");
     }
 }
@@ -598,17 +621,18 @@ NVirtualMachine::executeCALL()
     // CALL指令：call target
     // 格式：opcode(1) + target(4)
     if (m_pc + 5 <= m_codeSize) {
-        int32_t target = *reinterpret_cast<int32_t*>(&m_code[m_pc + 1]);
-        
+        int32_t target = *reinterpret_cast<int32_t *>(&m_code[m_pc + 1]);
+
         // 将返回地址压栈
         m_sp -= 4;
-        *reinterpret_cast<int32_t*>(&m_stack[m_sp]) = m_pc + 5;
-        
+        *reinterpret_cast<int32_t *>(&m_stack[m_sp]) = m_pc + 5;
+
         printf("CALL: target=%d, return address=%d\n", target, m_pc + 5);
-        
+
         // 跳转到目标地址
         m_pc = target;
-    } else {
+    }
+    else {
         printf("Error: CALL instruction out of bounds\n");
     }
 }
@@ -620,51 +644,84 @@ NVirtualMachine::executeRET()
     // 格式：opcode(1)
     if (m_sp + 4 <= m_stackSize) {
         // 从栈中弹出返回地址
-        int32_t returnAddr = *reinterpret_cast<int32_t*>(&m_stack[m_sp]);
+        int32_t returnAddr = *reinterpret_cast<int32_t *>(&m_stack[m_sp]);
         m_sp += 4;
-        
+
         printf("RET: return to %d\n", returnAddr);
-        
+
         // 跳转到返回地址
         m_pc = returnAddr;
-    } else {
+    }
+    else {
         printf("Error: RET instruction - stack underflow\n");
     }
 }
 
 void
-NVirtualMachine::executeTRAP()
+NVirtualMachine::run()
 {
-    // TRAP指令：trap type
-    // 格式：opcode(1) + type(1)
-    if (m_pc + 2 <= m_codeSize) {
-        uint8_t trapType = static_cast<uint8_t>(m_code[m_pc + 1]);
-        
-        printf("TRAP: type=%d\n", trapType);
-        
-        switch (static_cast<NTrapType>(trapType)) {
-            case NTrapType::HALT:
-                printf("Program halted\n");
-                m_pc = m_codeSize; // 停止执行
-                return;
-            case NTrapType::OUTCH:
-                // 输出字符（这里简化处理）
-                printf("Output: %c\n", static_cast<char>(m_ax));
-                break;
-            case NTrapType::GETCH:
-                // 获取字符（这里简化处理）
-                printf("Input character: ");
-                m_ax = getchar();
-                break;
-            default:
-                printf("Unknown trap type: %d\n", trapType);
-                break;
-        }
-        
-        m_pc += 2;
-    } else {
-        printf("Error: TRAP instruction out of bounds\n");
+    if (m_code == NULL || m_stack == NULL) {
+        printf("Error: Code or stack not initialized\n");
+        return;
     }
+
+    printf("Starting virtual machine...\n");
+
+    // 指令处理函数表
+    typedef void (NVirtualMachine::*InstructionHandler)();
+    static const InstructionHandler handlers[] = {
+        &NVirtualMachine::executeLMM,  // 0
+        &NVirtualMachine::executeST,   // 1
+        &NVirtualMachine::executeLEA,  // 2
+        &NVirtualMachine::executeADD,  // 3
+        &NVirtualMachine::executeSUB,  // 4
+        &NVirtualMachine::executeMUL,  // 5
+        &NVirtualMachine::executeDIV,  // 6
+        &NVirtualMachine::executeMOD,  // 7
+        &NVirtualMachine::executeNOT,  // 8
+        &NVirtualMachine::executeAND,  // 9
+        &NVirtualMachine::executeOR,   // 10
+        &NVirtualMachine::executeXOR,  // 11
+        &NVirtualMachine::executeSHL,  // 12
+        &NVirtualMachine::executeSHR,  // 13
+        &NVirtualMachine::executeEQ,   // 14
+        &NVirtualMachine::executeNE,   // 15
+        &NVirtualMachine::executeLT,   // 16
+        &NVirtualMachine::executeLE,   // 17
+        &NVirtualMachine::executeGT,   // 18
+        &NVirtualMachine::executeGE,   // 19
+        &NVirtualMachine::executePUSH, // 20
+        &NVirtualMachine::executePOP,  // 21
+        &NVirtualMachine::executeJMP,  // 22
+        &NVirtualMachine::executeJIC,  // 23
+        &NVirtualMachine::executeCALL, // 24
+        &NVirtualMachine::executeRET   // 25
+    };
+
+    // 指令执行循环
+    while (m_pc < m_codeSize) {
+        // 读取操作码
+        uint8_t opcode = static_cast<uint8_t>(m_code[m_pc]);
+
+        // 执行指令
+        if (opcode < sizeof(handlers) / sizeof(handlers[0])) {
+            (this->*handlers[opcode])();
+        }
+        else {
+            printf("Error: Unknown opcode 0x%02X at PC=0x%08X\n", opcode, m_pc);
+            m_pc = m_codeSize; // 停止执行
+        }
+    }
+
+    printf("VM execution finished\n");
+}
+
+m_pc += 2;
+}
+else
+{
+    printf("Error: TRAP instruction out of bounds\n");
+}
 }
 
 void
@@ -674,59 +731,58 @@ NVirtualMachine::start()
         printf("Error: Code or stack not initialized\n");
         return;
     }
-    
+
     printf("Starting virtual machine...\n");
-    
+
     // 指令处理函数表
     typedef void (NVirtualMachine::*InstructionHandler)();
     static const InstructionHandler handlers[] = {
-        &NVirtualMachine::executeLMM,    // 0
-        &NVirtualMachine::executeST,     // 1
-        &NVirtualMachine::executeLEA,    // 2
-        &NVirtualMachine::executeADD,    // 3
-        &NVirtualMachine::executeSUB,    // 4
-        &NVirtualMachine::executeMUL,    // 5
-        &NVirtualMachine::executeDIV,    // 6
-        &NVirtualMachine::executeMOD,    // 7
-        &NVirtualMachine::executeNOT,    // 8
-        &NVirtualMachine::executeAND,    // 9
-        &NVirtualMachine::executeOR,     // 10
-        &NVirtualMachine::executeXOR,    // 11
-        &NVirtualMachine::executeSHL,    // 12
-        &NVirtualMachine::executeSHR,    // 13
-        &NVirtualMachine::executeEQ,     // 14
-        &NVirtualMachine::executeNE,     // 15
-        &NVirtualMachine::executeLT,     // 16
-        &NVirtualMachine::executeLE,     // 17
-        &NVirtualMachine::executeGT,     // 18
-        &NVirtualMachine::executeGE,     // 19
-        &NVirtualMachine::executePUSH,   // 20
-        &NVirtualMachine::executePOP,    // 21
-        &NVirtualMachine::executeJMP,    // 22
-        &NVirtualMachine::executeJIC,    // 23
-        &NVirtualMachine::executeCALL,   // 24
-        &NVirtualMachine::executeRET,    // 25
-        &NVirtualMachine::executeTRAP    // 26
+        &NVirtualMachine::executeLMM,  // 0
+        &NVirtualMachine::executeST,   // 1
+        &NVirtualMachine::executeLEA,  // 2
+        &NVirtualMachine::executeADD,  // 3
+        &NVirtualMachine::executeSUB,  // 4
+        &NVirtualMachine::executeMUL,  // 5
+        &NVirtualMachine::executeDIV,  // 6
+        &NVirtualMachine::executeMOD,  // 7
+        &NVirtualMachine::executeNOT,  // 8
+        &NVirtualMachine::executeAND,  // 9
+        &NVirtualMachine::executeOR,   // 10
+        &NVirtualMachine::executeXOR,  // 11
+        &NVirtualMachine::executeSHL,  // 12
+        &NVirtualMachine::executeSHR,  // 13
+        &NVirtualMachine::executeEQ,   // 14
+        &NVirtualMachine::executeNE,   // 15
+        &NVirtualMachine::executeLT,   // 16
+        &NVirtualMachine::executeLE,   // 17
+        &NVirtualMachine::executeGT,   // 18
+        &NVirtualMachine::executeGE,   // 19
+        &NVirtualMachine::executePUSH, // 20
+        &NVirtualMachine::executePOP,  // 21
+        &NVirtualMachine::executeJMP,  // 22
+        &NVirtualMachine::executeJIC,  // 23
+        &NVirtualMachine::executeCALL, // 24
+        &NVirtualMachine::executeRET   // 25
     };
-    
+
     // 指令执行循环
     while (m_pc < m_codeSize) {
         // 读取操作码
         uint8_t opcode = static_cast<uint8_t>(m_code[m_pc]);
-        
+
         printf("PC: %d, Opcode: 0x%02X\n", m_pc, opcode);
-        
+
         // 检查操作码是否有效
         if (opcode >= sizeof(handlers) / sizeof(handlers[0])) {
             printf("Error: Unknown opcode: 0x%02X\n", opcode);
             m_pc++;
             continue;
         }
-        
+
         // 调用对应的处理函数
         (this->*handlers[opcode])();
     }
-    
+
     printf("Program execution completed\n");
 }
 
@@ -843,13 +899,13 @@ NVirtualMachine::getCodeSize()
     return m_codeSize;
 }
 
-int8_t*
+int8_t *
 NVirtualMachine::getStack()
 {
     return m_stack;
 }
 
-int8_t*
+int8_t *
 NVirtualMachine::getCode()
 {
     return m_code;
