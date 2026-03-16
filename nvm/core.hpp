@@ -69,33 +69,31 @@ public:
     // 获取代码指针
     int8_t * getCode();
 
-    // 指令执行（public 以便 run() 访问）
+    // 指令执行
     void executeLMM();
     void executeST();
     void executeLEA();
+    void executeLOAD();
+    void executeSTORE();
     void executeADD();
     void executeSUB();
     void executeMUL();
     void executeDIV();
     void executeMOD();
     void executeNOT();
-    void executeAND();
-    void executeOR();
-    void executeXOR();
-    void executeSHL();
-    void executeSHR();
-    void executeEQ();
-    void executeNE();
-    void executeLT();
-    void executeLE();
-    void executeGT();
-    void executeGE();
     void executePUSH();
     void executePOP();
+    void executeENTER();
+    void executeLEAVE();
     void executeJMP();
-    void executeJIC();
+    void executeJZ();
+    void executeJNZ();
     void executeCALL();
+    void executeCALLX();
     void executeRET();
+    void executeMOV();
+    void executeCLR();
+    void executeNOP();
 
 private:
     int32_t m_pc;
