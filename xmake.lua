@@ -27,7 +27,7 @@ target("nas")
     add_includedirs("nas")
     add_includedirs("nvm")
     add_files("nas/**.cpp")
-    add_files("nvm/instructions.cpp")
+    # instructions.cpp will be added when implemented
 
 -- 测试目标
 target("tests")
