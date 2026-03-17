@@ -26,8 +26,8 @@ target("nas")
     set_kind("binary")
     add_includedirs("nas")
     add_includedirs("nvm")
-    add_files("nas/**.cpp")
-    # instructions.cpp will be added when implemented
+    add_files("nas/main.cpp")
+    add_files("nas/instruction.cpp")
 
 -- 测试目标
 target("tests")
