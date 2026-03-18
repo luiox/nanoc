@@ -73,19 +73,23 @@ NInstructionsLMM::parserInstructionText(std::string & text)
         return nullptr;
     }
     auto ins = text;
-    // DEBUG_INFO("ins=%s",ins.c_str());
     // 先去除opcode的字符串
-    ins.replace(ins.find("lmm"), strlen("lmm"), "");
+    auto opcodePos = ins.find("lmm");
+    if (opcodePos == std::string::npos) {
+        return nullptr;
+    }
+    ins.replace(opcodePos, strlen("lmm"), "");
     trim(ins);
-    // DEBUG_INFO("ins=%s",ins.c_str());
     // 剩下的，找到逗号，然后分割为两个字符串
     auto pos = ins.find(",");
-    // DEBUG_INFO("pos=%u",pos);
+    if (pos == std::string::npos) {
+        return nullptr;
+    }
     std::string reg = ins.substr(0, pos - 1);
     std::string num = ins.substr(pos + 1);
+    trim(reg);
+    trim(num);
 
-    // DEBUG_INFO("reg=%s",reg.c_str());
-    // DEBUG_INFO("num=%s",num.c_str());
     if (!reg.empty() && !num.empty()) {
         int32_t val;
         if (num.size() > 2 && num.substr(0, 2) == "0x") {
@@ -105,25 +109,352 @@ NInstructionsLMM::parserInstructionText(std::string & text)
 NInstructionsInterface *
 NInstructionsST::parserInstructionText(std::string & text)
 {
-
+    // TODO: 实现ST指令解析
     return nullptr;
 }
 
 NInstructionsInterface *
 NInstructionsLEA::parserInstructionText(std::string & text)
 {
-
+    // TODO: 实现LEA指令解析
     return nullptr;
 }
+
+NInstructionsInterface *
+NInstructionsMUL::parserInstructionText(std::string & text)
+{
+    // TODO: 实现MUL指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsDIV::parserInstructionText(std::string & text)
+{
+    // TODO: 实现DIV指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsMOD::parserInstructionText(std::string & text)
+{
+    // TODO: 实现MOD指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsNOT::parserInstructionText(std::string & text)
+{
+    // TODO: 实现NOT指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsAND::parserInstructionText(std::string & text)
+{
+    // TODO: 实现AND指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsOR::parserInstructionText(std::string & text)
+{
+    // TODO: 实现OR指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsXOR::parserInstructionText(std::string & text)
+{
+    // TODO: 实现XOR指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsSHL::parserInstructionText(std::string & text)
+{
+    // TODO: 实现SHL指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsSHR::parserInstructionText(std::string & text)
+{
+    // TODO: 实现SHR指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsEQ::parserInstructionText(std::string & text)
+{
+    // TODO: 实现EQ指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsNE::parserInstructionText(std::string & text)
+{
+    // TODO: 实现NE指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsLT::parserInstructionText(std::string & text)
+{
+    // TODO: 实现LT指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsLE::parserInstructionText(std::string & text)
+{
+    // TODO: 实现LE指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsGT::parserInstructionText(std::string & text)
+{
+    // TODO: 实现GT指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsGE::parserInstructionText(std::string & text)
+{
+    // TODO: 实现GE指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsPUSH::parserInstructionText(std::string & text)
+{
+    // TODO: 实现PUSH指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsPOP::parserInstructionText(std::string & text)
+{
+    // TODO: 实现POP指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsJMP::parserInstructionText(std::string & text)
+{
+    // TODO: 实现JMP指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsJIC::parserInstructionText(std::string & text)
+{
+    // TODO: 实现JIC指令解析
+    return nullptr;
+}
+
+NInstructionsInterface *
+NInstructionsTRAP::parserInstructionText(std::string & text)
+{
+    // TODO: 实现TRAP指令解析
+    return nullptr;
+}
+NInstructionsADD::NInstructionsADD(std::string reg, int32_t val)
+  : m_reg(g_textToRegisterMap[reg])
+  , m_val(val)
+{
+}
+
+std::vector<uint8_t>
+NInstructionsADD::generateInstructionCode()
+{
+    std::vector<uint8_t> code;
+    code.push_back(static_cast<uint8_t>(NOpcode::ADD));
+    code.push_back(static_cast<uint8_t>(m_reg));
+    code.push_back(m_val);
+    return code;
+}
+
+std::string
+NInstructionsADD::generateInstructionName()
+{
+    return "add";
+}
+
 NInstructionsInterface *
 NInstructionsADD::parserInstructionText(std::string & text)
 {
+    if (text.empty()) {
+        return nullptr;
+    }
+    auto ins = text;
+    // 先去除opcode的字符串
+    auto opcodePos = ins.find("add");
+    if (opcodePos == std::string::npos) {
+        return nullptr;
+    }
+    ins.replace(opcodePos, strlen("add"), "");
+    trim(ins);
+    // 剩下的，找到逗号，然后分割为两个字符串
+    auto pos = ins.find(",");
+    if (pos == std::string::npos) {
+        return nullptr;
+    }
+    std::string reg = ins.substr(0, pos - 1);
+    std::string num = ins.substr(pos + 1);
+    trim(reg);
+    trim(num);
+
+    if (!reg.empty() && !num.empty()) {
+        int32_t val;
+        if (num.size() > 2 && num.substr(0, 2) == "0x") {
+            // num是十六进制数，需要转换为无符号字符
+            val = std::stoi(num, nullptr, 16);
+        }
+        else {
+            val = std::stoi(num, nullptr, 10);
+        }
+
+        return new NInstructionsADD(reg, val);
+    }
 
     return nullptr;
 }
+NInstructionsSUB::NInstructionsSUB(std::string reg, int32_t val)
+  : m_reg(g_textToRegisterMap[reg])
+  , m_val(val)
+{
+}
+
+std::vector<uint8_t>
+NInstructionsSUB::generateInstructionCode()
+{
+    std::vector<uint8_t> code;
+    code.push_back(static_cast<uint8_t>(NOpcode::SUB));
+    code.push_back(static_cast<uint8_t>(m_reg));
+    code.push_back(m_val);
+    return code;
+}
+
+std::string
+NInstructionsSUB::generateInstructionName()
+{
+    return "sub";
+}
+
 NInstructionsInterface *
 NInstructionsSUB::parserInstructionText(std::string & text)
 {
+    if (text.empty()) {
+        return nullptr;
+    }
+    auto ins = text;
+    // 先去除opcode的字符串
+    auto opcodePos = ins.find("sub");
+    if (opcodePos == std::string::npos) {
+        return nullptr;
+    }
+    ins.replace(opcodePos, strlen("sub"), "");
+    trim(ins);
+    // 剩下的，找到逗号，然后分割为两个字符串
+    auto pos = ins.find(",");
+    if (pos == std::string::npos) {
+        return nullptr;
+    }
+    std::string reg = ins.substr(0, pos - 1);
+    std::string num = ins.substr(pos + 1);
+    trim(reg);
+    trim(num);
+
+    if (!reg.empty() && !num.empty()) {
+        int32_t val;
+        if (num.size() > 2 && num.substr(0, 2) == "0x") {
+            // num是十六进制数，需要转换为无符号字符
+            val = std::stoi(num, nullptr, 16);
+        }
+        else {
+            val = std::stoi(num, nullptr, 10);
+        }
+
+        return new NInstructionsSUB(reg, val);
+    }
+
+    return nullptr;
+}
+
+NInstructionsCALL::NInstructionsCALL(std::string target)
+  : m_target(target)
+{
+}
+
+std::vector<uint8_t>
+NInstructionsCALL::generateInstructionCode()
+{
+    std::vector<uint8_t> code;
+    code.push_back(static_cast<uint8_t>(NOpcode::CALL));
+    // 注意：这里暂时只生成操作码，目标地址需要在链接时确定
+    // 实际实现中需要支持标签解析
+    return code;
+}
+
+std::string
+NInstructionsCALL::generateInstructionName()
+{
+    return "call";
+}
+
+NInstructionsInterface *
+NInstructionsCALL::parserInstructionText(std::string & text)
+{
+    if (text.empty()) {
+        return nullptr;
+    }
+    auto ins = text;
+    // 先去除opcode的字符串
+    auto opcodePos = ins.find("call");
+    if (opcodePos == std::string::npos) {
+        return nullptr;
+    }
+    ins.replace(opcodePos, strlen("call"), "");
+    trim(ins);
+    
+    if (!ins.empty()) {
+        return new NInstructionsCALL(ins);
+    }
+
+    return nullptr;
+}
+
+NInstructionsRET::NInstructionsRET()
+{
+}
+
+std::vector<uint8_t>
+NInstructionsRET::generateInstructionCode()
+{
+    std::vector<uint8_t> code;
+    code.push_back(static_cast<uint8_t>(NOpcode::RET));
+    return code;
+}
+
+std::string
+NInstructionsRET::generateInstructionName()
+{
+    return "ret";
+}
+
+NInstructionsInterface *
+NInstructionsRET::parserInstructionText(std::string & text)
+{
+    if (text.empty()) {
+        return nullptr;
+    }
+    auto ins = text;
+    trim(ins);
+    
+    if (ins == "ret") {
+        return new NInstructionsRET();
+    }
 
     return nullptr;
 }

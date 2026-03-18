@@ -40,7 +40,7 @@ trim(char * str)
 }
 
 static int
-stricmp(const char * s1, const char * s2)
+nvm_stricmp(const char * s1, const char * s2)
 {
     for (; *s1 && *s2; s1++, s2++) {
         if (tolower(*s1) != tolower(*s2)) {
@@ -51,7 +51,7 @@ stricmp(const char * s1, const char * s2)
 }
 
 static int
-strnicmp(const char * s1, const char * s2, size_t n)
+nvm_strnicmp(const char * s1, const char * s2, size_t n)
 {
     for (size_t i = 0; (i < n) && *s1 && *s2; s1++, s2++, i++) {
         if (tolower(*s1) != tolower(*s2)) {

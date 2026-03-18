@@ -124,7 +124,7 @@ private:
 class NInstructionsADD : public NInstructionsInterface
 {
 public:
-    NInstructionsADD();
+    NInstructionsADD(std::string reg, int32_t val);
     ~NInstructionsADD() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -134,12 +134,14 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsSUB : public NInstructionsInterface
 {
 public:
-    NInstructionsSUB();
+    NInstructionsSUB(std::string reg, int32_t val);
     ~NInstructionsSUB() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -149,6 +151,8 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    NRegister m_reg;
+    int32_t m_val;
 };
 
 class NInstructionsMUL : public NInstructionsInterface
@@ -439,7 +443,7 @@ private:
 class NInstructionsCALL : public NInstructionsInterface
 {
 public:
-    NInstructionsCALL();
+    NInstructionsCALL(std::string target);
     ~NInstructionsCALL() = default;
     // 指令二进制生成函数
     std::vector<uint8_t> generateInstructionCode() override;
@@ -449,6 +453,7 @@ public:
     static NInstructionsInterface * parserInstructionText(std::string & text);
 
 private:
+    std::string m_target;
 };
 
 class NInstructionsRET : public NInstructionsInterface

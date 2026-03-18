@@ -4,11 +4,16 @@ add_rules("plugin.compile_commands.autoupdate", {outputdir = "."})
 set_languages("c99")
 set_languages("c++17")
 
+-- 添加包依赖
+add_requires("gtest", "spdlog")
+
 -- NanoComplier
 target("ncc")
     set_kind("binary")
     add_includedirs("ncc")
     add_files("ncc/**.c")
+    add_files("ncc/**.cpp")
+    add_packages("spdlog")
 
 -- NanoVM
 target("nvm")
@@ -23,6 +28,32 @@ target("nas")
     add_includedirs("nvm")
     add_files("nas/**.cpp")
     add_files("nvm/instructions.cpp")
+
+-- 测试目标
+target("tests")
+    set_kind("binary")
+    add_includedirs("nvm")
+    add_includedirs("nas")
+    add_includedirs("ncc")
+    add_files("tests/**.cpp")
+    add_files("nvm/instructions.cpp")
+    add_files("nvm/core.cpp")
+    add_files("ncc/lexer.cpp")
+    add_files("ncc/parser.cpp")
+    add_files("ncc/codegen.cpp")
+    add_files("ncc/ast.cpp")
+    add_packages("gtest", "spdlog")
+
+-- 编译示例程序
+target("compile_examples")
+    set_kind("binary")
+    add_includedirs("ncc")
+    add_files("examples/compile_examples.cpp")
+    add_files("ncc/lexer.cpp")
+    add_files("ncc/parser.cpp")
+    add_files("ncc/codegen.cpp")
+    add_files("ncc/ast.cpp")
+    add_packages("spdlog")
 
 --
 -- If you want to known more usage about xmake, please see https://xmake.io
@@ -91,5 +122,4 @@ target("nas")
 --    add_ldflags("-L/usr/local/lib", "-lpthread", {force = true})
 --
 -- @endcode
---
 
