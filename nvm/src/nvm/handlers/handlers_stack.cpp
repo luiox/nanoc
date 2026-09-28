@@ -14,7 +14,6 @@ NVirtualMachine::executePUSH()
     }
 }
 
-// PUSHI IMM32：立即数压栈（指令长 5）
 void
 NVirtualMachine::executePUSHI()
 {
@@ -92,6 +91,32 @@ NVirtualMachine::executeJNZ()
     if (m_pc + 5 <= m_codeSize) {
         int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 1]);
         if (!(m_flags & FLAG_Z))
+            m_pc = addr;
+        else
+            m_pc += 5;
+    }
+}
+
+// JN：N（bit1，负）置位则跳转
+void
+NVirtualMachine::executeJN()
+{
+    if (m_pc + 5 <= m_codeSize) {
+        int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 1]);
+        if (m_flags & FLAG_N)
+            m_pc = addr;
+        else
+            m_pc += 5;
+    }
+}
+
+// JP：P（bit2，正）置位则跳转
+void
+NVirtualMachine::executeJP()
+{
+    if (m_pc + 5 <= m_codeSize) {
+        int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 1]);
+        if (m_flags & FLAG_P)
             m_pc = addr;
         else
             m_pc += 5;
