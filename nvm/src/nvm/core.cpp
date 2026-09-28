@@ -54,8 +54,15 @@ NVirtualMachine::load(std::string filename)
     fclose(pf);
     if (size >= 32 && memcmp(data, "NanoC", 5) == 0) {
         // 严格 v2.1 路径：校验失败抛异常（不污染 VM 状态）
-        loadV21(data, size);
+        try {
+            loadV21(data, size);
+        }
+        catch (...) {
+            free(data);
+            throw;
+        }
         free(data);
+        data = NULL;
     }
     else {
         // 旧裸格式 fallback：整文件当代码
