@@ -4,8 +4,23 @@
 #include "nvm/instructions.hpp"
 #include <stdint.h>
 #include <string>
+#include <vector>
 
 constexpr int32_t DEFAULT_STACK_SIZE = 8 * 1024 * 1024;
+
+// NCI v2.1 导入符号（宿主函数引用）
+struct NImportSymbol {
+    std::string name; // 符号名（不含 NUL）
+    int32_t addr;     // 宿主地址；0 = 留给动态链接
+    int32_t flags;    // bit0-1 = 调用约定：0=fastcall，1=cdecl；其余 0
+};
+
+// NCI v2.1 导出符号（代码段地址）
+struct NExportSymbol {
+    std::string name; // 符号名（不含 NUL）
+    int32_t addr;     // 代码段地址
+    int32_t flags;    // 恒 0
+};
 
 class NVirtualMachine
 {
@@ -62,6 +77,15 @@ public:
 
     // 获取代码大小
     int64_t getCodeSize();
+
+    // 获取数据段大小
+    int32_t getDataSize();
+
+    // 获取 v2.1 导入表
+    const std::vector<NImportSymbol> & getImports();
+
+    // 获取 v2.1 导出表
+    const std::vector<NExportSymbol> & getExports();
 
     // 获取栈指针
     int8_t * getStack();
@@ -120,6 +144,9 @@ public:
     void executeNOP();
 
 private:
+    // 严格 v2.1 加载路径：校验 32 字节头/两张表并载入数据段，失败抛 std::runtime_error
+    void loadV21(const int8_t * data, int64_t fileSize);
+
     int32_t m_pc;
     int32_t m_ax;
     int32_t m_flags;
@@ -132,6 +159,9 @@ private:
     int8_t * m_code;
     int32_t m_stackSize;
     int64_t m_codeSize;
+    int32_t m_dataSize;
+    std::vector<NImportSymbol> m_imports;
+    std::vector<NExportSymbol> m_exports;
 };
 void Nvm_init(struct Nvm * vm, int64_t stack_size);
 

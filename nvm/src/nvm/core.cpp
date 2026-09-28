@@ -1,7 +1,17 @@
 #include "nvm/core.hpp"
+#include <stdexcept>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// 小端 32 位读取（memcpy 实现避免对齐问题）
+static int32_t
+readI32(const int8_t * data, int64_t offset)
+{
+    int32_t v;
+    memcpy(&v, data + offset, sizeof(v));
+    return v;
+}
 
 NVirtualMachine::NVirtualMachine(int32_t stackSize)
   : m_sp(m_registers[4])
@@ -10,6 +20,7 @@ NVirtualMachine::NVirtualMachine(int32_t stackSize)
     m_stack = (int8_t *)malloc(stackSize);
     m_stackSize = stackSize;
     m_codeSize = 0;
+    m_dataSize = 0;
     m_ax = m_bp = m_flags = m_pc = 0;
     m_code = NULL;
     // m_sp/m_bp 是 m_registers[4]/[5] 的引用别名，须先清零寄存器，
@@ -35,14 +46,13 @@ NVirtualMachine::load(std::string filename)
     fseek(pf, 0, SEEK_SET);
     fread(data, 1, size, pf);
     fclose(pf);
-    if (size >= 32 && data[0] == 'N' && data[1] == 'a' && data[2] == 'n' && data[3] == 'o'
-        && data[4] == 'C') {
-        m_codeSize = *(int32_t *)&data[12];
-        m_pc = *(int32_t *)&data[28];
-        m_code = (int8_t *)malloc(m_codeSize);
-        memcpy(m_code, data + 32, m_codeSize);
+    if (size >= 32 && memcmp(data, "NanoC", 5) == 0) {
+        // 严格 v2.1 路径：校验失败抛异常（不污染 VM 状态）
+        loadV21(data, size);
+        free(data);
     }
     else {
+        // 旧裸格式 fallback：整文件当代码
         m_codeSize = size;
         m_code = data;
         m_pc = 0;
@@ -50,6 +60,84 @@ NVirtualMachine::load(std::string filename)
     }
     if (data)
         free(data);
+}
+
+// 严格 v2.1 加载：header(32B) | code | data | import table | export table
+void
+NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
+{
+    if (memcmp(data, "NanoC\0\0\0", 8) != 0)
+        throw std::runtime_error("NCI v2.1: bad magic (expect \"NanoC\\0\\0\\0\")");
+    int32_t headerSize = readI32(data, 8);
+    if (headerSize != 32)
+        throw std::runtime_error("NCI v2.1: unsupported headerSize "
+                                 + std::to_string(headerSize) + " (expect 32)");
+    int32_t codeSize = readI32(data, 12);
+    int32_t dataSize = readI32(data, 16);
+    int32_t importCount = readI32(data, 20);
+    int32_t exportCount = readI32(data, 24);
+    int32_t entryPoint = readI32(data, 28);
+    if (codeSize < 0 || dataSize < 0 || importCount < 0 || exportCount < 0)
+        throw std::runtime_error("NCI v2.1: negative segment/table size in header");
+    if ((int64_t)32 + codeSize + dataSize > fileSize)
+        throw std::runtime_error("NCI v2.1: code/data size exceeds file size");
+    if (entryPoint < 0 || entryPoint > codeSize)
+        throw std::runtime_error("NCI v2.1: entryPoint out of code segment");
+
+    // 导入表：int32 nameLen + name + NUL + pad 到 4 字节对齐（以 entry 起始为基准）+ addr
+    // + flags
+    int64_t off = 32 + (int64_t)codeSize + dataSize;
+    std::vector<NImportSymbol> imports;
+    for (int32_t i = 0; i < importCount; i++) {
+        if (off + 4 > fileSize)
+            throw std::runtime_error("NCI v2.1: truncated import table");
+        int32_t nameLen = readI32(data, off);
+        if (nameLen < 0 || off + 4 + (int64_t)nameLen + 1 > fileSize)
+            throw std::runtime_error("NCI v2.1: bad import symbol name");
+        NImportSymbol sym;
+        sym.name.assign((const char *)&data[off + 4], nameLen);
+        int64_t fixed = ((int64_t)4 + nameLen + 1 + 3) & ~(int64_t)3;
+        if (off + fixed + 8 > fileSize)
+            throw std::runtime_error("NCI v2.1: truncated import entry");
+        sym.addr = readI32(data, off + fixed);
+        sym.flags = readI32(data, off + fixed + 4);
+        imports.push_back(sym);
+        off += fixed + 8;
+    }
+
+    // 导出表：同构，addr=代码段地址，flags 恒 0
+    std::vector<NExportSymbol> exports;
+    for (int32_t i = 0; i < exportCount; i++) {
+        if (off + 4 > fileSize)
+            throw std::runtime_error("NCI v2.1: truncated export table");
+        int32_t nameLen = readI32(data, off);
+        if (nameLen < 0 || off + 4 + (int64_t)nameLen + 1 > fileSize)
+            throw std::runtime_error("NCI v2.1: bad export symbol name");
+        NExportSymbol sym;
+        sym.name.assign((const char *)&data[off + 4], nameLen);
+        int64_t fixed = ((int64_t)4 + nameLen + 1 + 3) & ~(int64_t)3;
+        if (off + fixed + 8 > fileSize)
+            throw std::runtime_error("NCI v2.1: truncated export entry");
+        sym.addr = readI32(data, off + fixed);
+        sym.flags = readI32(data, off + fixed + 4);
+        exports.push_back(sym);
+        off += fixed + 8;
+    }
+
+    // 全部校验通过后再提交，避免异常路径污染 VM 状态。
+    // 数据段加载点 = m_stack[codeSize .. codeSize+dataSize)，数据标号统一编址
+    if ((int64_t)codeSize + dataSize > m_stackSize)
+        throw std::runtime_error("NCI v2.1: data segment does not fit into memory");
+    int8_t * newCode = (int8_t *)malloc(codeSize > 0 ? codeSize : 1);
+    memcpy(newCode, data + 32, codeSize);
+    free(m_code);
+    m_code = newCode;
+    m_codeSize = codeSize;
+    m_dataSize = dataSize;
+    memcpy(m_stack + codeSize, data + 32 + codeSize, dataSize);
+    m_imports = std::move(imports);
+    m_exports = std::move(exports);
+    m_pc = entryPoint;
 }
 
 void
@@ -205,6 +293,21 @@ int64_t
 NVirtualMachine::getCodeSize()
 {
     return m_codeSize;
+}
+int32_t
+NVirtualMachine::getDataSize()
+{
+    return m_dataSize;
+}
+const std::vector<NImportSymbol> &
+NVirtualMachine::getImports()
+{
+    return m_imports;
+}
+const std::vector<NExportSymbol> &
+NVirtualMachine::getExports()
+{
+    return m_exports;
 }
 int8_t *
 NVirtualMachine::getStack()
