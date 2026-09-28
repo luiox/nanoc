@@ -100,10 +100,14 @@ xmake format
 **Key formatting rules:**
 - **Indentation**: 4 spaces (no tabs)
 - **Column limit**: 90 characters
-- **Brace style**: Allman-style for functions/namespaces, K&R for control flow
+- **Brace style**: two styles coexist **by directory**, each with its own `.clang-format`
+  - Root config (GNU): `nvm/`, `nas/` — return type & function brace on own line
+  - `ncc/`, `tests/`, `examples/` have a K&R sub-config — function brace on same line
+  - Never unify the two in one config; run the formatter per directory (it picks the nearest config automatically)
 - **Namespace indentation**: Indented
-- **Pointer alignment**: Middle (e.g., `int* ptr`)
-- **Include sorting**: Enabled
+- **Pointer alignment**: root = Middle (`int * ptr`); `ncc`/`tests`/`examples` = Left (`int* ptr`)
+- **Include sorting**: Enabled (project/quoted first, then angle brackets alphabetically)
+- **clang-format ≥16**: legacy keys such as `AlwaysBreakAfterReturnType` are silently overridden by `BasedOnStyle`; both keys are pinned explicitly in the root config — copy that pattern when adding style keys
 
 ### Header Guards
 
@@ -159,12 +163,12 @@ enum class NTokenKind {
 
 ### Include Order
 
-1. C standard headers (`<stdint.h>`, `<string>`)
-2. C++ standard library (`<vector>`, `<memory>`, `<string>`)
-3. External libraries (`<gtest/gtest.h>`, `<spdlog/spdlog.h>`)
-4. Project headers (relative paths: `"lexer.hpp"`, `"../ncc/ast.hpp"`)
+Fully defined by `.clang-format` (`IncludeCategories`). The effective rule in every directory:
 
-Sort includes within each group (`.clang-format` handles this).
+1. Project headers, quoted (e.g. `"lexer.hpp"`, `"../ncc/ast.hpp"`)
+2. Angle-bracket headers, alphabetical (e.g. `<fstream>`, `<gtest/gtest.h>`, `<string>`)
+
+Don't hand-sort includes — run `clang-format` on the files you touch.
 
 ### Error Handling
 
