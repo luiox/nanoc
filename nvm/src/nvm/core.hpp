@@ -111,11 +111,13 @@ public:
 
 private:
     int32_t m_pc;
-    int32_t m_sp;
-    int32_t m_bp;
     int32_t m_ax;
     int32_t m_flags;
     int32_t m_registers[8];
+    // 规范 v2.1 寄存器角色：R4=SP、R5=BP。用引用别名保证寄存器指令
+    // （mov/addi R4,...）与栈指令操作同一份存储
+    int32_t & m_sp;
+    int32_t & m_bp;
     int8_t * m_stack;
     int8_t * m_code;
     int32_t m_stackSize;
