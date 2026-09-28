@@ -218,7 +218,17 @@ library), but the C interop rules still apply if `.c` files are added:
 
 - Avoid Windows macro conflicts (e.g., use `NTokenKind` instead of `TokenKind`)
 - Use `#ifdef type / #undef type` guards if conflicts occur
-- Save files with **UTF-8 encoding** to prevent C4819 warnings
+- Save files as **UTF-8**（无 BOM 即可）：`xmake.lua` 已对 MSVC 全局加
+  `/utf-8`（限定 `tools = cl`），源码/执行字符集均为 UTF-8，C4819 与
+  "中文按 CP936 误读吞引号"的级联语法错误均已消除；不要把源码转成 GBK
+
+### Bytecode Format (NCI v2.1)
+
+- 文件布局、导入/导出表 entry 字节图、数据段统一编址、entryPoint 规则的
+  **权威定义**：`doc/Bytecode Format Specification v2.1.md` §2/§2.1
+- nas（汇编侧）与 nvm（加载侧）必须按同一张钉死字节图实现，改动布局须
+  先改规范、同步两侧实现与测试（test_assembler_v21 / test_loader /
+  test_integration_e2e 均为字节级断言）
 
 ---
 
@@ -245,16 +255,21 @@ NanoC/
 │       ├── instruction.hpp/.cpp  # Instruction parsing & encoding
 │       └── main.cpp              # Assembler entry
 ├── tests/         # GoogleTest tests
-│   ├── test_main.cpp       # Test runner
+│   ├── test_main.cpp            # Test runner
 │   ├── test_lexer.cpp
 │   ├── test_parser.cpp
 │   ├── test_codegen.cpp
-│   ├── test_vm.cpp
-│   ├── test_instructions.cpp
-│   └── test_libca.cpp      # libca smoke test
+│   ├── test_vm.cpp              # VM 执行级用例
+│   ├── test_instructions.cpp    # 指令编码断言（Assembler::parseLine）
+│   ├── test_assembler.cpp       # 汇编器基础用例
+│   ├── test_assembler_v21.cpp   # NCI v2.1 目标格式字节级用例
+│   ├── test_loader.cpp          # v2.1 加载器/宿主分发/动态链接用例
+│   ├── test_integration_e2e.cpp # 汇编→加载→宿主调用全链路 e2e
+│   └── test_libca.cpp           # libca smoke test
 ├── examples/      # Sample .nc programs
 ├── test/          # Legacy test files (.nas, .nca)
-├── xmake.lua      # Build configuration
+├── doc/           # 设计文档与规范（NCI v2.1 权威规范、开发计划、PRD）
+├── xmake.lua      # Build configuration（含 MSVC /utf-8 全局标志）
 ├── .clang-format  # Formatting (root=GNU for nvm/nas; ncc/tests/examples=K&R sub-configs)
 └── README.md
 ```
@@ -300,10 +315,15 @@ EXPECT_EQ(token.kind, expected);  // Log failure but continue
 
 ### Common Issues
 
-**C4819 Warning (Unicode)**: Save files as UTF-8 with BOM
-```bash
-# In VSCode: File → Save with Encoding → UTF-8 with BOM
-```
+**C4819 / 中文编码问题**：`xmake.lua` 已全局加 `/utf-8`（MSVC），源码用
+无 BOM 的 UTF-8 即可；若新建目标发现中文注释/字符串导致 C2001"常量中有
+换行符"级联报错，检查该目标是否受全局标志覆盖（新标志需限定
+`{tools = "cl"}`，勿影响 gcc/clang）
+
+**clang-format 版本**：根 `.clang-format` 钉死了 v22 键
+（`BreakAfterReturnType` 等），PATH 上的 v18 解析不了；用
+`D:/sdk/python/Python314/Scripts/clang-format.exe`（22.1.5），或
+`xmake format`
 
 **gtest not found**: Run `xmake config` to install dependencies
 ```bash
