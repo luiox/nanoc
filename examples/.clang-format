@@ -1,30 +1,31 @@
+# K&R 风格子配置：适用于 ncc/（以及同样风格的 tests/、examples/）
+# 根目录 .clang-format 为 GNU 风格，服务于 nvm/、nas/。
+# 两套并存的原因见 PR 说明：强行统一任一方向都会产生数千行格式化噪音。
 Language:	Cpp
 BasedOnStyle:	GNU
-# clang-format 22 显式钉死（GNU 风格默认值，显式化防版本漂移；
-# 注意 v16+ 旧键 AlwaysBreakAfterReturnType 已失效，新旧键需同时写）
-BreakAfterReturnType:	AllDefinitions
-AlwaysBreakAfterDefinitionReturnType:	All
 AccessModifierOffset:	-4
+BreakAfterReturnType:	None
+AlwaysBreakAfterDefinitionReturnType:	None
 BinPackArguments:	false
 BinPackParameters:	false
 BraceWrapping:
-  AfterClass:	true
+  AfterClass:	false
   AfterControlStatement:	false
   AfterEnum:	false
-  AfterFunction:	true
-  AfterNamespace:	true
+  AfterFunction:	false
+  AfterNamespace:	false
   AfterStruct:	false
   AfterUnion:	false
-  BeforeCatch:	true
-  BeforeElse:	true
+  BeforeCatch:	false
+  BeforeElse:	false
   IndentBraces:	false
 BreakBeforeBinaryOperators:	NonAssignment
 BreakBeforeBraces:	Custom
 BreakBeforeTernaryOperators:	true
-BreakConstructorInitializersBeforeComma:	true
+BreakConstructorInitializersBeforeComma:	false
 AllowAllArgumentsOnNextLine: false
 AllowAllParametersOfDeclarationOnNextLine: true
-ColumnLimit: 90
+ColumnLimit:	90
 CommentPragmas:	'^ IWYU pragma:'
 ConstructorInitializerAllOnOneLineOrOnePerLine:	false
 ConstructorInitializerIndentWidth:	2
@@ -34,13 +35,11 @@ DerivePointerAlignment:	false
 DisableFormat:	false
 ExperimentalAutoDetectBinPacking:	false
 ForEachMacros:	[ foreach, Q_FOREACH, BOOST_FOREACH ]
-IncludeCategories: 
-  - Regex:	'^"(llvm|llvm-c|clang|clang-c)/'
-    Priority:	2
-  - Regex:	'^(<|"(gtest|isl|json)/)'
-    Priority:	3
+IncludeCategories:
   - Regex:	'.*'
     Priority:	1
+  - Regex:	'^<'
+    Priority:	2
 IndentCaseLabels:	false
 IndentWidth:	4
 IndentWrappedFunctionNames:	false
@@ -48,13 +47,13 @@ KeepEmptyLinesAtTheStartOfBlocks:	true
 MacroBlockBegin:	''
 MacroBlockEnd:	''
 MaxEmptyLinesToKeep:	1
-NamespaceIndentation: All
+NamespaceIndentation:	All
 PenaltyBreakComment:	300
 PenaltyBreakFirstLessLess:	120
 PenaltyBreakString:	1000
 PenaltyExcessCharacter:	1000000
 PenaltyReturnTypeOnItsOwnLine:	60
-PointerAlignment:	Middle
+PointerAlignment:	Left
 ReflowComments:	true
 SortIncludes:	true
 SpaceAfterCStyleCast:	false
