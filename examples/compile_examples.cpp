@@ -1,6 +1,6 @@
-#include "../ncc/lexer.hpp"
-#include "../ncc/parser.hpp"
-#include "../ncc/codegen.hpp"
+#include "ncc/lexer.hpp"
+#include "ncc/parser.hpp"
+#include "ncc/codegen.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>

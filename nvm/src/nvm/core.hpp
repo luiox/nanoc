@@ -1,7 +1,7 @@
 #ifndef NVM_CORE_H
 #define NVM_CORE_H
 
-#include <instructions.hpp>
+#include "nvm/instructions.hpp"
 #include <stdint.h>
 #include <string>
 

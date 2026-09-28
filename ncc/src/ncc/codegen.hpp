@@ -1,7 +1,7 @@
 #ifndef NCC_CODEGEN_H
 #define NCC_CODEGEN_H
 
-#include "ast.hpp"
+#include "ncc/ast.hpp"
 #include <string>
 #include <vector>
 #include <map>

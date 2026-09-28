@@ -1,4 +1,4 @@
-#include "lexer.hpp"
+#include "ncc/lexer.hpp"
 #include <cctype>
 #include <stdexcept>
 

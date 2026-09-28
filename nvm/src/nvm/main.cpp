@@ -1,6 +1,6 @@
-#include <core.hpp>
+#include "nvm/core.hpp"
+#include "nvm/instructions.hpp"
 #include <ctype.h>
-#include <instructions.hpp>
 #include <iostream>
 #include <stdint.h>
 #include <stdio.h>

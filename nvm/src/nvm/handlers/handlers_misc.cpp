@@ -1,5 +1,5 @@
 // Miscellaneous Instructions Handlers
-#include "core.hpp"
+#include "nvm/core.hpp"
 
 void
 NVirtualMachine::executeMOV()

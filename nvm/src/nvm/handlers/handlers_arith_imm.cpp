@@ -1,5 +1,5 @@
 // Immediate Arithmetic Instructions Handlers
-#include "core.hpp"
+#include "nvm/core.hpp"
 
 void
 NVirtualMachine::executeADDI()
