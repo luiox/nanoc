@@ -165,8 +165,14 @@ enum class NTokenKind {
 
 Fully defined by `.clang-format` (`IncludeCategories`). The effective rule in every directory:
 
-1. Project headers, quoted (e.g. `"lexer.hpp"`, `"../ncc/ast.hpp"`)
-2. Angle-bracket headers, alphabetical (e.g. `<fstream>`, `<gtest/gtest.h>`, `<string>`)
+1. Project headers, quoted **with module prefix** (e.g. `"ncc/lexer.hpp"`, `"nvm/core.hpp"`,
+   `"nas/instruction.hpp"`)
+2. Angle-bracket headers, alphabetical (e.g. `<fstream>`, `<gtest/gtest.h>`, `<string>`) —
+   external libs only (gtest/spdlog/libca)
+
+Include roots are the module `src` dirs (`ncc/src`, `nvm/src`, `nas/src`), so every file —
+including sibling files inside the same module — writes the full module-prefixed path.
+Never use bare filenames (`"lexer.hpp"`) or `../`-relative paths (`"../ncc/lexer.hpp"`).
 
 Don't hand-sort includes — run `clang-format` on the files you touch.
 
@@ -219,30 +225,36 @@ The project mixes C (`main.c`) and C++ (`.cpp`) files:
 
 ```
 NanoC/
-├── ncc/           # Compiler source
-│   ├── lexer.hpp/.cpp      # Tokenizer
-│   ├── parser.hpp/.cpp     # AST parser
-│   ├── ast.hpp/.cpp        # AST node definitions
-│   ├── codegen.hpp/.cpp    # Code generation
-│   └── main.c              # Compiler entry point
+├── ncc/           # Compiler source — layout: <module>/src/<module>/ (module-prefixed includes)
+│   └── src/ncc/
+│       ├── lexer.hpp/.cpp      # Tokenizer
+│       ├── parser.hpp/.cpp     # AST parser
+│       ├── ast.hpp/.cpp        # AST node definitions
+│       ├── codegen.hpp/.cpp    # Code generation
+│       └── main.c              # Compiler entry point
 ├── nvm/           # Virtual machine
-│   ├── core.hpp/.cpp       # VM implementation
-│   ├── instructions.hpp/.cpp  # Instruction set
-│   ├── string_helper.hpp   # Utility
-│   └── main.cpp            # VM runner
+│   └── src/nvm/
+│       ├── core.hpp/.cpp       # VM implementation
+│       ├── instructions.hpp    # Instruction set
+│       ├── string_helper.hpp   # Utility
+│       ├── handlers/           # Per-instruction handler methods
+│       └── main.cpp            # VM runner
 ├── nas/           # Assembler
-│   └── main.cpp            # Assembler
+│   └── src/nas/
+│       ├── instruction.hpp/.cpp  # Instruction parsing & encoding
+│       └── main.cpp              # Assembler entry
 ├── tests/         # GoogleTest tests
 │   ├── test_main.cpp       # Test runner
 │   ├── test_lexer.cpp
 │   ├── test_parser.cpp
 │   ├── test_codegen.cpp
 │   ├── test_vm.cpp
-│   └── test_instructions.cpp
+│   ├── test_instructions.cpp
+│   └── test_libca.cpp      # libca smoke test
 ├── examples/      # Sample .nc programs
 ├── test/          # Legacy test files (.nas, .nca)
 ├── xmake.lua      # Build configuration
-├── .clang-format  # Code formatting rules
+├── .clang-format  # Formatting (root=GNU for nvm/nas; ncc/tests/examples=K&R sub-configs)
 └── README.md
 ```
 
