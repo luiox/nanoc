@@ -75,6 +75,8 @@ public:
     void executeLEA();
     void executeLOAD();
     void executeSTORE();
+    void executeLOADA();
+    void executeSTOREA();
     void executeADD();
     void executeADDI();
     void executeSUB();
@@ -96,6 +98,7 @@ public:
     void executeSHL();
     void executeSHR();
     void executePUSH();
+    void executePUSHI();
     void executePOP();
     void executeENTER();
     void executeLEAVE();

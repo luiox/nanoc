@@ -71,3 +71,35 @@ NVirtualMachine::executeSTORE()
         }
     }
 }
+
+// LOADA R, IMM32：LOAD 的绝对寻址形式，R = mem[IMM32]
+void
+NVirtualMachine::executeLOADA()
+{
+    if (m_pc + 6 <= m_codeSize) {
+        uint8_t reg = m_code[m_pc + 1];
+        int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 2]);
+        if (reg < 8) {
+            if (addr >= 0 && addr < m_stackSize) {
+                m_registers[reg] = *reinterpret_cast<int32_t *>(&m_stack[addr]);
+            }
+            m_pc += 6;
+        }
+    }
+}
+
+// STOREA R, IMM32：STORE 的绝对寻址形式，mem[IMM32] = R
+void
+NVirtualMachine::executeSTOREA()
+{
+    if (m_pc + 6 <= m_codeSize) {
+        uint8_t reg = m_code[m_pc + 1];
+        int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 2]);
+        if (reg < 8) {
+            if (addr >= 0 && addr < m_stackSize) {
+                *reinterpret_cast<int32_t *>(&m_stack[addr]) = m_registers[reg];
+            }
+            m_pc += 6;
+        }
+    }
+}
