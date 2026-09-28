@@ -14,6 +14,20 @@ NVirtualMachine::executePUSH()
     }
 }
 
+// PUSHI IMM32：立即数压栈（指令长 5）
+void
+NVirtualMachine::executePUSHI()
+{
+    if (m_pc + 5 <= m_codeSize) {
+        int32_t val = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 1]);
+        if (m_sp >= 4) {
+            m_sp -= 4;
+            *reinterpret_cast<int32_t *>(&m_stack[m_sp]) = val;
+            m_pc += 5;
+        }
+    }
+}
+
 void
 NVirtualMachine::executePOP()
 {

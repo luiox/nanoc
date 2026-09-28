@@ -64,6 +64,8 @@ NVirtualMachine::start()
     h[0x02] = &NVirtualMachine::executeLEA;
     h[0x03] = &NVirtualMachine::executeLOAD;
     h[0x04] = &NVirtualMachine::executeSTORE;
+    h[0x05] = &NVirtualMachine::executeLOADA;
+    h[0x06] = &NVirtualMachine::executeSTOREA;
     h[0x10] = &NVirtualMachine::executeADD;
     h[0x11] = &NVirtualMachine::executeADDI;
     h[0x12] = &NVirtualMachine::executeSUB;
@@ -85,7 +87,8 @@ NVirtualMachine::start()
     h[0x31] = &NVirtualMachine::executeCMPI;
     h[0x32] = &NVirtualMachine::executeTEST;
     h[0x40] = &NVirtualMachine::executePUSH;
-    h[0x41] = &NVirtualMachine::executePOP;
+    h[0x41] = &NVirtualMachine::executePUSHI;
+    h[0x42] = &NVirtualMachine::executePOP;
     h[0x43] = &NVirtualMachine::executeENTER;
     h[0x44] = &NVirtualMachine::executeLEAVE;
     h[0x50] = &NVirtualMachine::executeJMP;
