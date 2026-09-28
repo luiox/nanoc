@@ -15,9 +15,8 @@ add_requires("libca 0.0.8", {configs = {modules = "core,str,collection,fs,opt,lo
 target("ncc")
     set_kind("binary")
     add_includedirs("ncc/src")
-    add_files("ncc/src/ncc/**.c")
     add_files("ncc/src/ncc/**.cpp")
-    add_packages("spdlog")
+    add_packages("spdlog", "libca")
 
 -- NanoVM
 target("nvm")
