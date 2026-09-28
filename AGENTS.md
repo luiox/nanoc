@@ -208,10 +208,11 @@ TEST(LexerTest, Keywords) {
 
 ### C/C++ Interop
 
-The project mixes C (`main.c`) and C++ (`.cpp`) files:
+All sources are C++17 today (entry points are `.cpp`; `ncc` links the C++ libca
+library), but the C interop rules still apply if `.c` files are added:
 - Use `extern "C"` guards in headers exposed to C files
 - Avoid C++ features in `.c` files
-- Keep C code minimal (main entry points only)
+- Keep C code minimal (entry points only)
 
 ### Windows Compatibility
 
@@ -231,7 +232,7 @@ NanoC/
 │       ├── parser.hpp/.cpp     # AST parser
 │       ├── ast.hpp/.cpp        # AST node definitions
 │       ├── codegen.hpp/.cpp    # Code generation
-│       └── main.c              # Compiler entry point
+│       └── main.cpp            # CLI entry point (libca opt)
 ├── nvm/           # Virtual machine
 │   └── src/nvm/
 │       ├── core.hpp/.cpp       # VM implementation
