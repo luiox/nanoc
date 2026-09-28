@@ -3,6 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 // 小端 32 位读取（memcpy 实现避免对齐问题）
 static int32_t
@@ -23,6 +28,7 @@ NVirtualMachine::NVirtualMachine(int32_t stackSize)
     m_dataSize = 0;
     m_ax = m_bp = m_flags = m_pc = 0;
     m_code = NULL;
+    m_nextHostAddr = HOST_ADDRESS_BASE;
     // m_sp/m_bp 是 m_registers[4]/[5] 的引用别名，须先清零寄存器，
     // 再通过引用写入 SP 初始值（栈从高地址向低地址生长）
     for (int i = 0; i < 8; i++)
@@ -138,6 +144,101 @@ NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
     m_imports = std::move(imports);
     m_exports = std::move(exports);
     m_pc = entryPoint;
+}
+
+// ==== 宿主函数注册与动态链接 ====
+
+void
+NVirtualMachine::registerHostFunction(int32_t addr, NHostFunction fn)
+{
+    if (addr <= 0 || !fn) {
+        printf("Error: registerHostFunction: invalid host address 0x%08X\n",
+               (uint32_t)addr);
+        return;
+    }
+    m_hostFunctions[addr] = fn;
+}
+
+void
+NVirtualMachine::registerHostFunction(const std::string & name, NHostFunction fn)
+{
+    if (name.empty() || !fn) {
+        printf("Error: registerHostFunction: invalid symbol name\n");
+        return;
+    }
+    m_hostFunctionsByName[name] = fn;
+}
+
+int32_t
+NVirtualMachine::internHostSymbol(const std::string & name, NHostFunction fn)
+{
+    auto it = m_hostAddrByName.find(name);
+    if (it != m_hostAddrByName.end())
+        return it->second; // 同一符号复用已分配地址
+    int32_t addr = m_nextHostAddr++;
+    m_hostFunctions[addr] = fn;
+    m_hostAddrByName[name] = addr;
+    return addr;
+}
+
+bool
+NVirtualMachine::resolveImportsByName()
+{
+    bool ok = true;
+    for (auto & sym : m_imports) {
+        if (sym.addr != 0)
+            continue;
+        auto it = m_hostFunctionsByName.find(sym.name);
+        if (it == m_hostFunctionsByName.end()) {
+            printf("Error: resolveImportsByName: unresolved import symbol '%s'\n",
+                   sym.name.c_str());
+            ok = false;
+            continue;
+        }
+        sym.addr = internHostSymbol(sym.name, it->second);
+    }
+    return ok;
+}
+
+bool
+NVirtualMachine::loadHostLibrary(const std::string & path)
+{
+#ifdef _WIN32
+    HMODULE lib = LoadLibraryA(path.c_str());
+    if (!lib) {
+        printf("Error: loadHostLibrary: cannot load '%s' (GetLastError=%lu)\n",
+               path.c_str(),
+               GetLastError());
+        return false;
+    }
+#else
+    void * lib = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (!lib) {
+        printf("Error: loadHostLibrary: cannot load '%s' (%s)\n",
+               path.c_str(),
+               dlerror());
+        return false;
+    }
+#endif
+    bool ok = true;
+    for (auto & sym : m_imports) {
+        if (sym.addr != 0)
+            continue;
+#ifdef _WIN32
+        FARPROC proc = GetProcAddress(lib, sym.name.c_str());
+#else
+        void * proc = dlsym(lib, sym.name.c_str());
+#endif
+        if (!proc) {
+            printf("Error: loadHostLibrary: symbol '%s' not found in '%s'\n",
+                   sym.name.c_str(),
+                   path.c_str());
+            ok = false;
+            continue;
+        }
+        sym.addr = internHostSymbol(sym.name, reinterpret_cast<NHostFunction>(proc));
+    }
+    return ok;
 }
 
 void
