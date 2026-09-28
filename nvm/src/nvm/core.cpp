@@ -4,15 +4,19 @@
 #include <string.h>
 
 NVirtualMachine::NVirtualMachine(int32_t stackSize)
+  : m_sp(m_registers[4])
+  , m_bp(m_registers[5])
 {
     m_stack = (int8_t *)malloc(stackSize);
     m_stackSize = stackSize;
     m_codeSize = 0;
     m_ax = m_bp = m_flags = m_pc = 0;
     m_code = NULL;
-    m_sp = stackSize;
+    // m_sp/m_bp 是 m_registers[4]/[5] 的引用别名，须先清零寄存器，
+    // 再通过引用写入 SP 初始值（栈从高地址向低地址生长）
     for (int i = 0; i < 8; i++)
         m_registers[i] = 0;
+    m_sp = stackSize;
 }
 
 NVirtualMachine::~NVirtualMachine() { free(m_stack); }
@@ -93,6 +97,10 @@ NVirtualMachine::start()
     h[0x70] = &NVirtualMachine::executeMOV;
     h[0x71] = &NVirtualMachine::executeCLR;
     h[0x7F] = &NVirtualMachine::executeNOP;
+    // 栈底压入哨兵返回地址：main 顶层的 leave/ret 落到代码段末尾，循环自然结束
+    m_sp -= 4;
+    *(int32_t *)&m_stack[m_sp] = (int32_t)m_codeSize;
+
     while (m_pc < m_codeSize) {
         uint8_t op = m_code[m_pc];
         if (h[op])
