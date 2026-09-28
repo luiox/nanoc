@@ -1,6 +1,7 @@
 #include "ncc/codegen.hpp"
 #include "ncc/lexer.hpp"
 #include "ncc/parser.hpp"
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <libca/opt/opt.hpp>
@@ -108,9 +109,14 @@ namespace {
 
     std::string make_depfile(const std::string& out,
                              const std::vector<std::string>& inputs) {
-        std::string dep = out + ":";
+        // make 把反斜杠当转义字符，depfile 内路径统一写成正斜杠
+        auto normalize = [](std::string path) {
+            std::replace(path.begin(), path.end(), '\\', '/');
+            return path;
+        };
+        std::string dep = normalize(out) + ":";
         for (const std::string& in : inputs) {
-            dep += " " + in;
+            dep += " " + normalize(in);
         }
         dep += "\n";
         return dep;
