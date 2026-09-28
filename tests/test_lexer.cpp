@@ -1,4 +1,4 @@
-#include "../ncc/lexer.hpp"
+#include "ncc/lexer.hpp"
 #include <gtest/gtest.h>
 #include <spdlog/spdlog.h>
 #include <string>

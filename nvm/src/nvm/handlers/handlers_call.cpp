@@ -1,5 +1,5 @@
 // Call and Return Instructions Handlers
-#include "core.hpp"
+#include "nvm/core.hpp"
 
 void
 NVirtualMachine::executeCALL()

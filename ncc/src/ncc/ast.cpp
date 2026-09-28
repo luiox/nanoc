@@ -1,4 +1,4 @@
-#include "ast.hpp"
+#include "ncc/ast.hpp"
 
 // Program节点的accept实现
 void Program::accept(ASTVisitor& visitor) {

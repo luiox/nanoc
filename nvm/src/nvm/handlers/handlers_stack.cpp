@@ -1,5 +1,5 @@
 // Stack and Control Flow Instructions Handlers
-#include "core.hpp"
+#include "nvm/core.hpp"
 
 void
 NVirtualMachine::executePUSH()

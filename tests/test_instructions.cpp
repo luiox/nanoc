@@ -1,6 +1,6 @@
+#include "nas/instruction.hpp"
 #include <gtest/gtest.h>
 #include <spdlog/spdlog.h>
-#include <instruction.hpp>
 #include <string>
 #include <vector>
 
@@ -16,8 +16,9 @@ static std::vector<uint8_t> assemble(const std::string& line) {
 
 // 从字节流读取小端 32 位立即数
 static int32_t read32(const std::vector<uint8_t>& c, size_t off) {
-    return static_cast<int32_t>(c[off]) | (static_cast<int32_t>(c[off + 1]) << 8) |
-           (static_cast<int32_t>(c[off + 2]) << 16) | (static_cast<int32_t>(c[off + 3]) << 24);
+    return static_cast<int32_t>(c[off]) | (static_cast<int32_t>(c[off + 1]) << 8)
+           | (static_cast<int32_t>(c[off + 2]) << 16)
+           | (static_cast<int32_t>(c[off + 3]) << 24);
 }
 
 // LMM 解析与编码：opcode + reg + imm32（6 字节，见 Bytecode Format Spec v2.1）

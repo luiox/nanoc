@@ -1,7 +1,7 @@
+#include "nvm/core.hpp"
+#include <fstream>
 #include <gtest/gtest.h>
 #include <spdlog/spdlog.h>
-#include <core.hpp>
-#include <fstream>
 #include <vector>
 
 // 测试虚拟机初始化

@@ -1,8 +1,8 @@
 #ifndef NCC_PARSER_H
 #define NCC_PARSER_H
 
-#include "lexer.hpp"
-#include "ast.hpp"
+#include "ncc/lexer.hpp"
+#include "ncc/ast.hpp"
 #include <memory>
 #include <vector>
 

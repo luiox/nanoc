@@ -1,5 +1,5 @@
 // Compare and Logic Instructions Handlers
-#include "core.hpp"
+#include "nvm/core.hpp"
 
 void
 NVirtualMachine::executeCMP()

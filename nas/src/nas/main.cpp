@@ -1,4 +1,4 @@
-#include "instruction.hpp"
+#include "nas/instruction.hpp"
 #include <fstream>
 #include <iostream>
 #include <map>
