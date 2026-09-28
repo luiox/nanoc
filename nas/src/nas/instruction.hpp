@@ -6,6 +6,12 @@
 #include <string>
 #include <vector>
 
+// 调用约定标记（写入导入表 entry 的 flags 低 2 位，见 Bytecode Format Spec v2.1 §4.2）
+enum class NCallingConvention : uint8_t {
+    FASTCALL = 0, // 缺省：前 4 个整型参数走 R0-R3
+    CDECL = 1,    // 可变参数：调用者清栈（如 printf）
+};
+
 enum class NOpcode : uint8_t {
     LMM = 0x00,
     ST = 0x01,
@@ -62,12 +68,29 @@ class Instruction
 public:
     NOpcode opcode;
     std::vector<uint8_t> bytes;
+    int sourceLine = 0;            // 源码行号（1 起始），由装配驱动填写，用于错误定位
+    std::string pendingLabel;      // 非空 = 地址操作数为标号，待第二遍回填
+    bool patchFromImports = false; // true = 地址取自导入表（callx 符号），否则取自标号表
+    int32_t patchOffset = -1;      // bytes 中待回填 IMM32 的偏移；-1 = 无
+
     Instruction(NOpcode op)
       : opcode(op)
     {
     }
     virtual ~Instruction() = default;
     virtual void emit() = 0;
+
+protected:
+    // 追加 4 字节立即数；若 pendingLabel 非空则写 0 占位并记录回填偏移
+    void emitImm32(int32_t v);
+};
+
+// 汇编结果：ok=false 时 errorLine（1 起始）与 errorMessage 有效
+struct AssemblyResult {
+    bool ok = false;
+    std::vector<uint8_t> image; // 完整 NCI v2.1 文件镜像
+    int errorLine = 0;
+    std::string errorMessage;
 };
 
 class Assembler
@@ -76,6 +99,9 @@ public:
     static uint8_t parseRegister(const std::string & s);
     static int32_t parseInt(const std::string & s);
     static std::unique_ptr<Instruction> parseLine(const std::string & line);
+    // 整体汇编：两遍扫描，生成 NCI v2.1 完整目标文件
+    // （32 字节头 + 代码段 + 数据段 + 导入表 + 导出表）
+    static AssemblyResult assemble(const std::string & source);
 };
 
 #endif

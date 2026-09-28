@@ -1,18 +1,7 @@
 #include "nas/instruction.hpp"
 #include <fstream>
 #include <iostream>
-#include <map>
-#include <vector>
-
-struct Label {
-    std::string name;
-    int32_t addr;
-};
-
-struct LabelRef {
-    int32_t offset;
-    std::string label;
-};
+#include <sstream>
 
 int
 main(int argc, char * argv[])
@@ -33,38 +22,17 @@ main(int argc, char * argv[])
         return 1;
     }
 
-    std::vector<std::string> lines;
-    std::string line;
-    while (std::getline(ifs, line)) {
-        lines.push_back(line);
-    }
+    std::stringstream buffer;
+    buffer << ifs.rdbuf();
+    std::string source = buffer.str();
     ifs.close();
 
-    // First pass: collect labels and generate code
-    std::map<std::string, int32_t> labels;
-    std::vector<std::unique_ptr<Instruction>> instructions;
-    std::vector<LabelRef> labelRefs;
-    int32_t pc = 0;
-
-    for (const auto & l : lines) {
-        // Skip empty/comments
-        if (l.empty() || l[0] == ';' || l[0] == '#')
-            continue;
-
-        // Check for label
-        if (l.back() == ':') {
-            std::string name = l.substr(0, l.size() - 1);
-            labels[name] = pc;
-            continue;
-        }
-
-        // Parse instruction
-        auto instr = Assembler::parseLine(l);
-        if (instr) {
-            instr->emit();
-            instructions.push_back(std::move(instr));
-            pc += instructions.back()->bytes.size();
-        }
+    // 两遍扫描汇编为 NCI v2.1 完整目标文件
+    AssemblyResult result = Assembler::assemble(source);
+    if (!result.ok) {
+        std::cerr << "Error: " << input << ":" << result.errorLine << ": "
+                  << result.errorMessage << std::endl;
+        return 1;
     }
 
     // Write NCI file
@@ -73,37 +41,11 @@ main(int argc, char * argv[])
         std::cerr << "Error: Cannot write " << output << std::endl;
         return 1;
     }
-
-    // Write header (32 bytes)
-    const char magic[8] = { 'N', 'a', 'n', 'o', 'C', '\0', 0, 0 };
-    ofs.write(magic, 8);
-
-    int32_t headerSize = 32;
-    int32_t codeSize = pc;
-    int32_t dataSize = 0;
-    int32_t importCount = 0;
-    int32_t exportCount = 0;
-    int32_t entryPoint = 0;
-
-    // Auto-find main label
-    if (labels.count("main"))
-        entryPoint = labels["main"];
-
-    ofs.write(reinterpret_cast<char *>(&headerSize), 4);
-    ofs.write(reinterpret_cast<char *>(&codeSize), 4);
-    ofs.write(reinterpret_cast<char *>(&dataSize), 4);
-    ofs.write(reinterpret_cast<char *>(&importCount), 4);
-    ofs.write(reinterpret_cast<char *>(&exportCount), 4);
-    ofs.write(reinterpret_cast<char *>(&entryPoint), 4);
-
-    // Write code
-    for (const auto & instr : instructions) {
-        ofs.write(reinterpret_cast<const char *>(instr->bytes.data()),
-                  instr->bytes.size());
-    }
-
+    ofs.write(reinterpret_cast<const char *>(result.image.data()),
+              static_cast<std::streamsize>(result.image.size()));
     ofs.close();
-    std::cout << "Assembled " << input << " -> " << output << " (" << codeSize
+
+    std::cout << "Assembled " << input << " -> " << output << " (" << result.image.size()
               << " bytes)" << std::endl;
 
     return 0;
