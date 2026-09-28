@@ -7,6 +7,10 @@ set_languages("c++17")
 -- 添加包依赖
 add_requires("gtest", "spdlog")
 
+-- libca 基础库（PRD R14：编译器新代码一律使用 libca；锁小版本，按需裁剪模块）
+add_repositories("luiox-repo https://github.com/luiox/luiox-repo.git")
+add_requires("libca 0.0.8", {configs = {modules = "core,str,collection,fs,opt,log"}})
+
 -- NanoComplier
 target("ncc")
     set_kind("binary")
@@ -43,7 +47,7 @@ target("tests")
     add_files("ncc/parser.cpp")
     add_files("ncc/codegen.cpp")
     add_files("ncc/ast.cpp")
-    add_packages("gtest", "spdlog")
+    add_packages("gtest", "spdlog", "libca")
 
 -- 编译示例程序
 target("compile_examples")
