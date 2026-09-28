@@ -161,6 +161,48 @@ public:
     }
 };
 
+class LOADA : public Instruction
+{
+    uint8_t reg;
+    int32_t addr;
+
+public:
+    LOADA(uint8_t r, int32_t a)
+      : Instruction(NOpcode::LOADA)
+      , reg(r)
+      , addr(a)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(reg);
+        write32(bytes, addr);
+    }
+};
+
+class STOREA : public Instruction
+{
+    uint8_t reg;
+    int32_t addr;
+
+public:
+    STOREA(uint8_t r, int32_t a)
+      : Instruction(NOpcode::STOREA)
+      , reg(r)
+      , addr(a)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(reg);
+        write32(bytes, addr);
+    }
+};
+
 // ============================================================================
 // Arithmetic Instructions
 // ============================================================================
@@ -407,6 +449,115 @@ public:
 };
 
 // ============================================================================
+// Logic Instructions (immediate forms)
+// ============================================================================
+
+class ANDI : public Instruction
+{
+    uint8_t reg;
+    int32_t val;
+
+public:
+    ANDI(uint8_t r, int32_t v)
+      : Instruction(NOpcode::ANDI)
+      , reg(r)
+      , val(v)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(reg);
+        write32(bytes, val);
+    }
+};
+
+class ORI : public Instruction
+{
+    uint8_t reg;
+    int32_t val;
+
+public:
+    ORI(uint8_t r, int32_t v)
+      : Instruction(NOpcode::ORI)
+      , reg(r)
+      , val(v)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(reg);
+        write32(bytes, val);
+    }
+};
+
+class XORI : public Instruction
+{
+    uint8_t reg;
+    int32_t val;
+
+public:
+    XORI(uint8_t r, int32_t v)
+      : Instruction(NOpcode::XORI)
+      , reg(r)
+      , val(v)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(reg);
+        write32(bytes, val);
+    }
+};
+
+class SHLI : public Instruction
+{
+    uint8_t reg;
+    uint8_t shamt;
+
+public:
+    SHLI(uint8_t r, uint8_t s)
+      : Instruction(NOpcode::SHLI)
+      , reg(r)
+      , shamt(s)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(reg);
+        bytes.push_back(shamt);
+    }
+};
+
+class SHRI : public Instruction
+{
+    uint8_t reg;
+    uint8_t shamt;
+
+public:
+    SHRI(uint8_t r, uint8_t s)
+      : Instruction(NOpcode::SHRI)
+      , reg(r)
+      , shamt(s)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(reg);
+        bytes.push_back(shamt);
+    }
+};
+
+// ============================================================================
 // Stack Instructions
 // ============================================================================
 
@@ -425,6 +576,24 @@ public:
     {
         bytes.push_back(static_cast<uint8_t>(opcode));
         bytes.push_back(reg);
+    }
+};
+
+class PUSHI : public Instruction
+{
+    int32_t val;
+
+public:
+    PUSHI(int32_t v)
+      : Instruction(NOpcode::PUSHI)
+      , val(v)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        write32(bytes, val);
     }
 };
 
@@ -525,6 +694,42 @@ class JNZ : public Instruction
 public:
     JNZ(int32_t a)
       : Instruction(NOpcode::JNZ)
+      , addr(a)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        write32(bytes, addr);
+    }
+};
+
+class JN : public Instruction
+{
+    int32_t addr;
+
+public:
+    JN(int32_t a)
+      : Instruction(NOpcode::JN)
+      , addr(a)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        write32(bytes, addr);
+    }
+};
+
+class JP : public Instruction
+{
+    int32_t addr;
+
+public:
+    JP(int32_t a)
+      : Instruction(NOpcode::JP)
       , addr(a)
     {
     }
@@ -704,6 +909,10 @@ Assembler::parseLine(const std::string & line)
             return std::make_unique<STORE>(parseRegister(reg), parseRegister(arg2));
         }
     }
+    if (op == "loada")
+        return std::make_unique<LOADA>(parseRegister(arg1), parseInt(arg2));
+    if (op == "storea")
+        return std::make_unique<STOREA>(parseRegister(arg1), parseInt(arg2));
     if (op == "add")
         return std::make_unique<ADD>(parseRegister(arg1), parseRegister(arg2));
     if (op == "addi")
@@ -728,8 +937,20 @@ Assembler::parseLine(const std::string & line)
         return std::make_unique<NOT>(parseRegister(arg1));
     if (op == "neg")
         return std::make_unique<NEG>(parseRegister(arg1));
+    if (op == "andi")
+        return std::make_unique<ANDI>(parseRegister(arg1), parseInt(arg2));
+    if (op == "ori")
+        return std::make_unique<ORI>(parseRegister(arg1), parseInt(arg2));
+    if (op == "xori")
+        return std::make_unique<XORI>(parseRegister(arg1), parseInt(arg2));
+    if (op == "shli")
+        return std::make_unique<SHLI>(parseRegister(arg1), parseInt(arg2));
+    if (op == "shri")
+        return std::make_unique<SHRI>(parseRegister(arg1), parseInt(arg2));
     if (op == "push")
         return std::make_unique<PUSH>(parseRegister(arg1));
+    if (op == "pushi")
+        return std::make_unique<PUSHI>(parseInt(arg1));
     if (op == "pop")
         return std::make_unique<POP>(parseRegister(arg1));
     if (op == "enter")
@@ -742,6 +963,10 @@ Assembler::parseLine(const std::string & line)
         return std::make_unique<JZ>(parseInt(arg1));
     if (op == "jnz")
         return std::make_unique<JNZ>(parseInt(arg1));
+    if (op == "jn")
+        return std::make_unique<JN>(parseInt(arg1));
+    if (op == "jp")
+        return std::make_unique<JP>(parseInt(arg1));
     if (op == "call")
         return std::make_unique<CALL>(parseInt(arg1));
     if (op == "callx")
