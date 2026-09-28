@@ -4,6 +4,11 @@ add_rules("plugin.compile_commands.autoupdate", {outputdir = "."})
 set_languages("c99")
 set_languages("c++17")
 
+-- MSVC 源码/执行字符集统一为 UTF-8：源文件多为无 BOM 的 UTF-8（含中文注释与
+-- 字符串字面量），缺此标志时 cl 按系统 CP936 误读，奇数字节后跟引号会吞掉
+-- 闭引号引发级联语法错误（gcc/clang 无此参数，限定 cl）
+add_cxflags("/utf-8", {tools = "cl"})
+
 -- 添加包依赖
 add_requires("gtest", "spdlog")
 
