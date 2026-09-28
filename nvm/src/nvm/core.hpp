@@ -97,6 +97,11 @@ public:
     void executeXOR();
     void executeSHL();
     void executeSHR();
+    void executeANDI();
+    void executeORI();
+    void executeXORI();
+    void executeSHLI();
+    void executeSHRI();
     void executePUSH();
     void executePUSHI();
     void executePOP();
@@ -105,6 +110,8 @@ public:
     void executeJMP();
     void executeJZ();
     void executeJNZ();
+    void executeJN();
+    void executeJP();
     void executeCALL();
     void executeCALLX();
     void executeRET();

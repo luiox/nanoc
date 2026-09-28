@@ -79,10 +79,15 @@ NVirtualMachine::start()
     h[0x1A] = &NVirtualMachine::executeNOT;
     h[0x1B] = &NVirtualMachine::executeNEG;
     h[0x20] = &NVirtualMachine::executeAND;
+    h[0x21] = &NVirtualMachine::executeANDI;
     h[0x22] = &NVirtualMachine::executeOR;
+    h[0x23] = &NVirtualMachine::executeORI;
     h[0x24] = &NVirtualMachine::executeXOR;
+    h[0x25] = &NVirtualMachine::executeXORI;
     h[0x26] = &NVirtualMachine::executeSHL;
+    h[0x27] = &NVirtualMachine::executeSHLI;
     h[0x28] = &NVirtualMachine::executeSHR;
+    h[0x29] = &NVirtualMachine::executeSHRI;
     h[0x30] = &NVirtualMachine::executeCMP;
     h[0x31] = &NVirtualMachine::executeCMPI;
     h[0x32] = &NVirtualMachine::executeTEST;
@@ -94,6 +99,8 @@ NVirtualMachine::start()
     h[0x50] = &NVirtualMachine::executeJMP;
     h[0x51] = &NVirtualMachine::executeJZ;
     h[0x52] = &NVirtualMachine::executeJNZ;
+    h[0x53] = &NVirtualMachine::executeJN;
+    h[0x54] = &NVirtualMachine::executeJP;
     h[0x60] = &NVirtualMachine::executeCALL;
     h[0x61] = &NVirtualMachine::executeCALLX;
     h[0x62] = &NVirtualMachine::executeRET;
