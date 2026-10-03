@@ -105,10 +105,16 @@ struct Symbol {
     int column = 0;
     // 仅函数使用：参数类型序列
     ca::collection::ArrayList<SemanticType> paramTypes;
+    // 定义所在文件（PRD R2a）：装载器合并编译单元时标注；空 = 单文件模式
+    std::string definedIn;
+    // export 修饰的顶层符号（PRD R2a）：跨文件可见；未导出的顶层符号仅
+    // 定义所在文件可见
+    bool isExported = false;
 };
 
 // 全局符号摘要（analyze 结果的一部分，供调用方与测试核对符号表内容）。
 // 按登记顺序排列：函数先于全局变量（两遍分析，函数签名先统一登记）。
+// 多文件时跨文件私有同名符号各有一条记录（name 相同，definedIn 区分）。
 struct SymbolSummary {
     std::string name;
     SymbolKind kind = SymbolKind::Variable;
@@ -116,6 +122,8 @@ struct SymbolSummary {
     ca::collection::ArrayList<std::string> paramTypes; // 仅函数：参数类型可读名
     int line = 0;
     int column = 0;
+    std::string definedIn;   // 定义所在文件（空 = 单文件模式）
+    bool isExported = false; // export 标记（PRD R2a）
 };
 
 // 语义分析结果：全部诊断 + 全局符号表摘要
@@ -138,6 +146,13 @@ struct SemanticResult {
 //   外层名字恢复可见）。
 // - 全局变量按声明顺序可见（先声明后使用）；函数签名统一先登记，因此允许
 //   前向调用与相互递归。
+//
+// 多文件可见性（PRD R2a，装载器合并编译单元后分析）：
+// - 每条顶层声明带 sourceFile；类型命名空间（struct 标签/typedef 别名）仍为
+//   全编译单元统一（一期不做可见性分级，跨文件类型即 C 头文件语义）。
+// - 函数与全局变量两态可见：export 导出（全单元可见）；未导出仅定义所在
+//   文件可见。重复定义检测见 declareGlobal 注释（main 全局唯一、导出名
+//   全单元唯一、跨文件私有同名合法）。
 //
 // struct 与 typedef（PRD R1.2 第二批）的命名空间决策：
 // - struct 标签与 typedef 名合并进同一个"类型命名空间"，与变量/函数命名空间
@@ -193,8 +208,22 @@ private:
     Scope& currentScope();
     void pushScope();
     void popScope();
-    // 由内向外逐层查找；每层先查变量表再查函数表（同一层内二者不会同名）
+    // 由内向外逐层查找；每层先查变量表再查函数表（同一层内二者不会同名）。
+    // 局部作用域未命中时回退到顶层符号表（受跨文件可见性约束，见下）
     const Symbol* lookupSymbol(const std::string& name) const;
+
+    // ---- 顶层符号表（PRD R2a 多文件可见性）----
+    // 顶层符号不复用全局作用域平表：跨文件私有同名符号各存一份，
+    // 以「展示名 → 登记槽位」索引。可见性解析（use 处文件 = F）：
+    // 1. F 内定义（私有或导出）；2. 任意文件的导出定义；否则不可见。
+    // 重复定义检测：同文件同名沿用 redefinition 报错；跨文件时 main 必须
+    // 全局唯一，任一方导出视为冲突；双方皆私有的跨文件同名合法（配合
+    // codegen 的标号 mangle 隔离）。
+    bool declareGlobal(const Symbol& symbol);
+    const Symbol* lookupGlobal(const std::string& name) const;
+    // 名字有定义但当前文件不可见时的诊断文案（无可隐藏定义则返回空串），
+    // 用于把 "undeclared identifier" 细化为 "defined in ... but not exported"
+    std::string hiddenGlobalHint(const std::string& name) const;
 
     // ---- 声明登记 ----
     // 当前作用域登记变量；同名冲突（与变量或函数）报 redefinition 并返回 false
@@ -299,6 +328,10 @@ private:
     std::string m_fileName;
     std::vector<Scope> m_scopes;
     SemanticResult m_result;
+    // 顶层符号表（PRD R2a）：登记序槽位 + 展示名索引，见 declareGlobal 注释
+    std::vector<Symbol> m_globalSymbols;
+    std::map<std::string, std::vector<std::size_t>> m_globalByName;
+    std::string m_currentFile; // 当前检查的顶层声明所在文件（decl->sourceFile）
     // struct 布局表与 typedef 表：文件作用域单一类型命名空间（决策见类注释）
     std::map<std::string, StructInfo> m_structs;
     std::map<std::string, SemanticType> m_typedefs;
