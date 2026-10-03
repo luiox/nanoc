@@ -76,6 +76,8 @@ NVirtualMachine::load(std::string filename)
     fseek(pf, 0, SEEK_SET);
     fread(data, 1, size, pf);
     fclose(pf);
+    // 格式嗅探：仅按前 5 字节 "NanoC" 宽松判定（v2.1 的 8 字节魔数与头字段
+    // 严格校验在 loadV21 内做）；不匹配则按旧裸格式整文件当代码执行
     if (size >= 32 && memcmp(data, "NanoC", 5) == 0) {
         // 严格 v2.1 路径：校验失败抛异常（不污染 VM 状态）
         try {
@@ -154,6 +156,12 @@ NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
 }
 
 // ==== 宿主库函数注册与动态链接 ====
+//
+// 宿主地址分配策略：地址空间与代码/数据段隔离，从 HOST_ADDRESS_BASE 起
+// 线性递增（internHostSymbol）；静态绑定的显式地址与 nas 分配的伪宿主地址
+// 原位登记（bindHostSymbol）。按名表 m_hostAddrByName 保证同一符号跨解析
+// 路径（registerHostFunction / loadHostLibrary / resolveImportsByName）
+// 只登记一次、地址一致
 
 void
 NVirtualMachine::registerHostFunction(int32_t addr, NHostFunction fn)
@@ -448,6 +456,13 @@ NVirtualMachine::loadHostLibrary(const std::string & path)
     return ok;
 }
 
+// 主执行循环。
+//   分发表：下标 = opcode（NCI v2.1 规范 §3.1；权威枚举为
+//   nas/src/nas/instruction.hpp 的 NOpcode，nvm 侧按既有决策不重复定义，
+//   两侧取值一致性由字节级 e2e 测试钉死）。表项为空 = 保留操作码
+//   哨兵协议：执行前在栈底压入返回地址 = 代码段末尾（m_codeSize），main
+//   顶层的 leave/ret 弹出哨兵后 pc == m_codeSize，主循环自然终止（无 HLT）
+//   未知操作码：报错并停在原地（pc 不前进）
 void
 NVirtualMachine::start()
 {

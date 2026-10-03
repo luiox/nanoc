@@ -1102,6 +1102,9 @@ splitDataItems(const std::string & args, std::string & err)
 // Parser
 // ============================================================================
 
+// 单行汇编 → 指令对象；空行/注释行与未知指令均返回 nullptr。
+// 地址类操作数非纯数字时记为 pendingLabel（待 assemble 第二遍回填）：
+// callx 符号标记 patchFromImports（地址取自导入表），其余取自本模块标号表
 std::unique_ptr<Instruction>
 Assembler::parseLine(const std::string & line)
 {

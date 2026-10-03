@@ -279,6 +279,9 @@ Linker::linkFiles(const std::vector<std::string> & inputPaths)
     return linkImages(images);
 }
 
+// 链接主流程：解析各模块 → 基址前缀和 → 合并导出表 → 导入内部解析判定 →
+// 合并未解析导入 → 重定位 code 段（线性解码 + 地址分类平移，即"重定位扫描"）
+// → 拼接段 → 重算 entryPoint → 序列化。链接语义与已知限制详见 linker.hpp 类注释
 LinkResult
 Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
 {
