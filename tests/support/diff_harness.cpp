@@ -5,6 +5,7 @@
 #include "ncc/codegen.hpp"
 #include "ncc/ir.hpp"
 #include "ncc/lexer.hpp"
+#include "ncc/llvm_backend.hpp"
 #include "ncc/parser.hpp"
 #include "ncc/semantic.hpp"
 #include "nvm/core.hpp"
@@ -184,6 +185,41 @@ namespace nanoc_diff {
             }
         };
 
+        // LLVM 后端（进程外真编译，PRD R6）：ir::Module → .ll → llc →
+        // lld-link/clang 链接 → 运行。无 LLVM 工具链（llc/链接器）时
+        // probe() 为 false → 矩阵整列 skip（与 C 后端 skip 策略一致）
+        class LlvmDiffBackend : public IDiffBackend {
+        public:
+            std::string name() const override { return "llvm"; }
+
+            bool probe() override {
+                const llvm_backend::Toolchain& tc = llvm_backend::toolchain();
+                return !tc.llc.empty() && !tc.linker.empty();
+            }
+
+            BackendOutput execute(const std::string& nccSource) override {
+                BackendOutput output;
+                ir::Module module;
+                std::string diagnostics;
+                if (!lowerToIr(nccSource, module, diagnostics)) {
+                    output.diagnostics = diagnostics;
+                    return output;
+                }
+                const std::string llText = llvm_backend::emit(module);
+                const std::string exePath = "diffmx_llvm_run.exe";
+                std::remove(exePath.c_str()); // 清理上次残留，防误跑旧 exe
+                if (!llvm_backend::compileToExe(llText, exePath, diagnostics)) {
+                    output.diagnostics = diagnostics;
+                    return output;
+                }
+                output.executed = true;
+                output.rawExit = std::system(exePath.c_str());
+                output.exitCode8 = output.rawExit & 0xFF;
+                std::remove(exePath.c_str());
+                return output;
+            }
+        };
+
         std::vector<std::unique_ptr<IDiffBackend>>& backendStorage() {
             static std::vector<std::unique_ptr<IDiffBackend>> storage;
             return storage;
@@ -311,9 +347,10 @@ namespace nanoc_diff {
         if (!backendStorage().empty()) {
             return; // 幂等：矩阵跑两遍（各测试读缓存）不重复注册
         }
-        // R6 接入点：未来 LLVM 后端在此追加一次 registerBackend(...) 即自动扩列
+        // R6 接入点已兑现：LLVM 后端在此追加一次 registerBackend，矩阵自动扩列
         registerBackend(std::make_unique<VmBackend>());
         registerBackend(std::make_unique<CDiffBackend>());
+        registerBackend(std::make_unique<LlvmDiffBackend>());
     }
 
     // ---------------------------------------------------------------------------
