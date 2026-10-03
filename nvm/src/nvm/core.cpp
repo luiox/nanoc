@@ -11,6 +11,18 @@
 
 namespace
 {
+    // NCI v2.1 头字段偏移（规范 §2；头尺寸常量 NCI_V21_HEADER_SIZE 在 core.hpp）
+    constexpr int64_t OFF_HEADER_SIZE = 8;
+    constexpr int64_t OFF_CODE_SIZE = 12;
+    constexpr int64_t OFF_DATA_SIZE = 16;
+    constexpr int64_t OFF_IMPORT_COUNT = 20;
+    constexpr int64_t OFF_EXPORT_COUNT = 24;
+    constexpr int64_t OFF_ENTRY_POINT = 28;
+    // 符号表 entry 尾部定长字段：addr@+0、flags@+4（共 8 字节）
+    constexpr int64_t SYM_TRAILER_SIZE = 8;
+    // opcode 分发表覆盖 uint8 全域
+    constexpr int OPCODE_SPACE_SIZE = 256;
+
     // 解析一张符号表 entry：int32 nameLen + name + NUL + pad4（entry 起始基准）
     // + addr + flags（规范 §2.1）。导入/导出表同构，tableName 仅用于错误消息
     // （"import"/"export"）；截断或非法即抛 std::runtime_error
@@ -32,25 +44,25 @@ namespace
                                      + " symbol name");
         name.assign((const char *)&data[off + 4], nameLen);
         int64_t fixed = ((int64_t)4 + nameLen + 1 + 3) & ~(int64_t)3;
-        if (off + fixed + 8 > fileSize)
+        if (off + fixed + SYM_TRAILER_SIZE > fileSize)
             throw std::runtime_error(std::string("NCI v2.1: truncated ") + tableName
                                      + " entry");
         addr = readI32(data, off + fixed);
         flags = readI32(data, off + fixed + 4);
-        off += fixed + 8;
+        off += fixed + SYM_TRAILER_SIZE;
     }
 } // namespace
 
 NVirtualMachine::NVirtualMachine(int32_t stackSize)
-  : m_sp(m_registers[4])
-  , m_bp(m_registers[5])
+  : m_sp(m_registers[SP_REGISTER_INDEX])
+  , m_bp(m_registers[BP_REGISTER_INDEX])
 {
     m_stack = (int8_t *)malloc(stackSize);
     m_stackSize = stackSize;
     m_codeSize = 0;
     m_dataSize = 0;
     m_ax = m_bp = m_flags = m_pc = 0;
-    m_code = NULL;
+    m_code = nullptr;
     m_nextHostAddr = HOST_ADDRESS_BASE;
     // m_sp/m_bp 是 m_registers[4]/[5] 的引用别名，须先清零寄存器，
     // 再通过引用写入 SP 初始值（栈从高地址向低地址生长）
@@ -78,7 +90,7 @@ NVirtualMachine::load(std::string filename)
     fclose(pf);
     // 格式嗅探：仅按前 5 字节 "NanoC" 宽松判定（v2.1 的 8 字节魔数与头字段
     // 严格校验在 loadV21 内做）；不匹配则按旧裸格式整文件当代码执行
-    if (size >= 32 && memcmp(data, "NanoC", 5) == 0) {
+    if (size >= NCI_V21_HEADER_SIZE && memcmp(data, "NanoC", sizeof("NanoC") - 1) == 0) {
         // 严格 v2.1 路径：校验失败抛异常（不污染 VM 状态）
         try {
             loadV21(data, size);
@@ -88,14 +100,14 @@ NVirtualMachine::load(std::string filename)
             throw;
         }
         free(data);
-        data = NULL;
+        data = nullptr;
     }
     else {
         // 旧裸格式 fallback：整文件当代码
         m_codeSize = size;
         m_code = data;
         m_pc = 0;
-        data = NULL;
+        data = nullptr;
     }
 }
 
@@ -105,15 +117,15 @@ NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
 {
     if (memcmp(data, NCI_V21_MAGIC, sizeof(NCI_V21_MAGIC)) != 0)
         throw std::runtime_error("NCI v2.1: bad magic (expect \"NanoC\\0\\0\\0\")");
-    int32_t headerSize = readI32(data, 8);
+    int32_t headerSize = readI32(data, OFF_HEADER_SIZE);
     if (headerSize != NCI_V21_HEADER_SIZE)
         throw std::runtime_error("NCI v2.1: unsupported headerSize "
                                  + std::to_string(headerSize) + " (expect 32)");
-    int32_t codeSize = readI32(data, 12);
-    int32_t dataSize = readI32(data, 16);
-    int32_t importCount = readI32(data, 20);
-    int32_t exportCount = readI32(data, 24);
-    int32_t entryPoint = readI32(data, 28);
+    int32_t codeSize = readI32(data, OFF_CODE_SIZE);
+    int32_t dataSize = readI32(data, OFF_DATA_SIZE);
+    int32_t importCount = readI32(data, OFF_IMPORT_COUNT);
+    int32_t exportCount = readI32(data, OFF_EXPORT_COUNT);
+    int32_t entryPoint = readI32(data, OFF_ENTRY_POINT);
     if (codeSize < 0 || dataSize < 0 || importCount < 0 || exportCount < 0)
         throw std::runtime_error("NCI v2.1: negative segment/table size in header");
     if ((int64_t)NCI_V21_HEADER_SIZE + codeSize + dataSize > fileSize)
@@ -469,7 +481,7 @@ NVirtualMachine::start()
     if (!m_code || !m_stack)
         return;
     typedef void (NVirtualMachine::*H)();
-    H h[256] = {};
+    H h[OPCODE_SPACE_SIZE] = {};
     h[0x00] = &NVirtualMachine::executeLMM;
     h[0x01] = &NVirtualMachine::executeST;
     h[0x02] = &NVirtualMachine::executeLEA;

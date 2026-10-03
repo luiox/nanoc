@@ -27,6 +27,10 @@ enum class NRegister : uint8_t {
 // 通用寄存器数量（R0-R7，与 NRegister 编码一致；R4=SP、R5=BP）
 constexpr int32_t REGISTER_COUNT = 8;
 
+// 寄存器角色下标（规范 v2.1）：R4=SP、R5=BP（m_registers 别名）
+constexpr int32_t SP_REGISTER_INDEX = 4;
+constexpr int32_t BP_REGISTER_INDEX = 5;
+
 // 指令长度（字节，规范 §3.1 指令长度表；按操作数形态命名，取指边界检查用）
 constexpr int32_t INSTR_LEN_NONE = 1; // 仅 opcode：LEAVE/RET/NOP
 constexpr int32_t INSTR_LEN_REG = 2;  // opcode + reg：PUSH/POP/NOT/NEG/CLR

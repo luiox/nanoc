@@ -16,6 +16,9 @@ enum class NCallingConvention : uint8_t {
 // 确定性伪宿主地址，加载期由宿主库按符号名解析
 constexpr int32_t IMPORT_FLAG_DYNAMIC = 0x4;
 
+// 导入表/导出表 entry flags bit0-1：调用约定字段掩码
+constexpr int32_t CONVENTION_FLAGS_MASK = 0x3;
+
 // 无地址 extern 的伪宿主地址分配基址/步长（按声明序递增；与代码/数据地址空间及
 // VM 宿主地址分配区 0x7F000000 起（HOST_ADDRESS_BASE）隔离）
 constexpr int32_t DYNAMIC_HOST_BASE = 0x7E000000;

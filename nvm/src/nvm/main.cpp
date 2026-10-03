@@ -6,16 +6,24 @@
 #include <string>
 #include <vector>
 
-void
-help_handler()
+namespace
 {
-    // 用法属于错误路径输出（仅在参数不足时打印），走 stderr
-    fprintf(stderr, "Usage: nvm <input file> [options]\n");
-    fprintf(stderr, "Options: --Xss set stack size(b,k,m)\n");
-    fprintf(stderr, "         --host-lib <path> load host library for dynamic imports\n");
-    fprintf(stderr, "                 (repeatable, e.g. --host-lib msvcrt.dll)\n");
-    fprintf(stderr, "Example: nvm test.nci --host-lib C:/Windows/System32/msvcrt.dll\n");
-}
+    // --Xss 容量单位进率
+    constexpr int32_t KIB = 1024;
+
+    void
+    help_handler()
+    {
+        // 用法属于错误路径输出（仅在参数不足时打印），走 stderr
+        fprintf(stderr, "Usage: nvm <input file> [options]\n");
+        fprintf(stderr, "Options: --Xss set stack size(b,k,m)\n");
+        fprintf(stderr,
+                "         --host-lib <path> load host library for dynamic imports\n");
+        fprintf(stderr, "                 (repeatable, e.g. --host-lib msvcrt.dll)\n");
+        fprintf(stderr,
+                "Example: nvm test.nci --host-lib C:/Windows/System32/msvcrt.dll\n");
+    }
+} // namespace
 
 int
 main(int argc, char * argv[])
@@ -46,7 +54,7 @@ main(int argc, char * argv[])
             continue;
         }
         if (arg.find("--Xss=") == 0) {
-            std::string sizeStr = arg.substr(6);
+            std::string sizeStr = arg.substr(strlen("--Xss="));
             char unit = sizeStr.back();
             sizeStr.pop_back();
             int32_t size = std::stoi(sizeStr);
@@ -58,11 +66,11 @@ main(int argc, char * argv[])
                 break;
             case 'k':
             case 'K':
-                stackSize = size * 1024;
+                stackSize = size * KIB;
                 break;
             case 'm':
             case 'M':
-                stackSize = size * 1024 * 1024;
+                stackSize = size * KIB * KIB;
                 break;
             default:
                 fprintf(stderr, "Error: Invalid stack size unit '%c'\n", unit);

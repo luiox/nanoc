@@ -1026,22 +1026,22 @@ parseStringBytes(const std::string & s, std::vector<uint8_t> & out, std::string 
             char e = s[++i];
             switch (e) {
             case 'n':
-                out.push_back(0x0A);
+                out.push_back(static_cast<uint8_t>('\n'));
                 break;
             case 't':
-                out.push_back(0x09);
+                out.push_back(static_cast<uint8_t>('\t'));
                 break;
             case 'r':
-                out.push_back(0x0D);
+                out.push_back(static_cast<uint8_t>('\r'));
                 break;
             case '0':
                 out.push_back(0x00);
                 break;
             case '\\':
-                out.push_back(0x5C);
+                out.push_back(static_cast<uint8_t>('\\'));
                 break;
             case '"':
-                out.push_back(0x22);
+                out.push_back(static_cast<uint8_t>('"'));
                 break;
             default:
                 err = std::string("未知转义序列 '\\") + e + "'";
@@ -1717,7 +1717,7 @@ Assembler::assemble(const std::string & source)
         appendNameField(img, im.name);
         write32(img, im.address);
         write32(img,
-                static_cast<int32_t>(im.convention & 0x03)
+                static_cast<int32_t>(im.convention & CONVENTION_FLAGS_MASK)
                   | (im.dynamic ? IMPORT_FLAG_DYNAMIC : 0));
     }
     // 导出表：与导入表同构，addr = 标号统一编址地址，flags 恒 0

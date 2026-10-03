@@ -26,6 +26,17 @@ namespace
         return x;
     }
 
+    // NCI v2.1 头字段偏移（规范 §2；头尺寸/魔数常量在 instruction.hpp）
+    constexpr size_t HDR_OFF_HEADER_SIZE = 8;
+    constexpr size_t HDR_OFF_CODE_SIZE = 12;
+    constexpr size_t HDR_OFF_DATA_SIZE = 16;
+    constexpr size_t HDR_OFF_IMPORT_COUNT = 20;
+    constexpr size_t HDR_OFF_EXPORT_COUNT = 24;
+    // 符号表 entry 尾部定长字段：addr@+0、flags@+4（共 8 字节）
+    constexpr size_t SYM_TRAILER_SIZE = 8;
+    // 导入表 flags 合法位：bit0-1 调用约定 + bit2 动态导入（规范 §2.1）
+    constexpr int32_t IMPORT_FLAGS_LEGAL_MASK = 0x7;
+
     // ==== 符号表中间表示 ====
 
     struct LinkImport {
@@ -169,13 +180,13 @@ namespace
                     static_cast<size_t>(nameLen));
         size_t fixed = 4 + static_cast<size_t>(nameLen) + 1;
         fixed = (fixed + 3) & ~static_cast<size_t>(3);
-        if (off + fixed + 8 > img.size()) {
+        if (off + fixed + SYM_TRAILER_SIZE > img.size()) {
             err = "符号表截断（addr/flags 不完整）";
             return false;
         }
         addr = getI32(img, off + fixed);
         flags = getI32(img, off + fixed + 4);
-        off += fixed + 8;
+        off += fixed + SYM_TRAILER_SIZE;
         return true;
     }
 
@@ -188,14 +199,14 @@ namespace
             err = "坏魔数（期望 \"NanoC\\0\\0\\0\"）";
             return false;
         }
-        if (getI32(img, 8) != NCI_HEADER_SIZE) {
+        if (getI32(img, HDR_OFF_HEADER_SIZE) != NCI_HEADER_SIZE) {
             err = "不支持的 headerSize（期望 32）";
             return false;
         }
-        m.codeSize = getI32(img, 12);
-        m.dataSize = getI32(img, 16);
-        int32_t importCount = getI32(img, 20);
-        int32_t exportCount = getI32(img, 24);
+        m.codeSize = getI32(img, HDR_OFF_CODE_SIZE);
+        m.dataSize = getI32(img, HDR_OFF_DATA_SIZE);
+        int32_t importCount = getI32(img, HDR_OFF_IMPORT_COUNT);
+        int32_t exportCount = getI32(img, HDR_OFF_EXPORT_COUNT);
         if (m.codeSize < 0 || m.dataSize < 0 || importCount < 0 || exportCount < 0) {
             err = "头部段/表大小为负";
             return false;
@@ -215,7 +226,7 @@ namespace
             LinkImport im;
             if (!readTableEntry(img, off, im.name, im.addr, im.flags, err))
                 return false;
-            if (im.flags & ~0x7) {
+            if (im.flags & ~IMPORT_FLAGS_LEGAL_MASK) {
                 err = "导入符号 '" + im.name + "' flags 非法（bit0-2 之外必须为 0）";
                 return false;
             }
