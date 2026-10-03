@@ -30,9 +30,24 @@ struct Diagnostic {
 // 同一作用域内先登记的名字会与后登记的同名变量/函数冲突（报 redefinition）。
 enum class SymbolKind { Variable, Parameter, Function };
 
-// 语义类型。当前语言只有 int/char 两个值类型，void 仅作函数返回类型；
-// Error 是"毒类型"：前序错误已报告时用它占位，避免同一根源产生级联报错。
-enum class SemanticType { Int, Char, Void, Error };
+// 语义类型（PRD R1.2 扩展）。
+// 值类型：Int/Char；void 仅作函数返回类型；Error 是"毒类型"：前序错误已报告时
+// 用它占位，避免同一根源产生级联报错。
+// 指针/数组（一级指针与一维数组，多级/多维在解析后由语义显式拒绝）：
+// - IntPtr/CharPtr：pointer-to-T。当前全部标量 4 字节，指针按指向类型缩放即 ×4
+// - IntArray/CharArray：array-of-T（长度不参与类型同一性，元素按 4 字节槽存放）
+// - Null：NULL 关键字的类型，可与任意指针类型互相赋值/比较，不得转为标量
+enum class SemanticType {
+    Int,
+    Char,
+    Void,
+    Error,
+    IntPtr,
+    CharPtr,
+    IntArray,
+    CharArray,
+    Null
+};
 
 // 符号表条目
 struct Symbol {
@@ -83,8 +98,16 @@ struct SemanticResult {
 // - int 到 char 是窄化转换：语言没有显式转换语法，一律拒绝并报错。
 // - 算术运算结果为 int；比较与逻辑运算结果为 int（0/1）；一元 - 与 ! 的
 //   结果为 int（char 操作数先提升）。
+// - 数组名在赋值/初始化/传参/返回/比较场合退化为 pointer-to-T（decay）。
+// - NULL（Null 类型）可赋给任意指针类型、与任意指针比较；不得转为标量。
+// - char* 与 int* 互不相容；指针不得与标量互转。
 // - void 只能作函数返回类型；void 值（void 函数调用的结果）不允许出现在
 //   任何需要值的位置。
+//
+// 已知限制（本里程碑显式拒绝而非静默错译）：
+// - char* 不得解引用/下标：字符串字面量按字节打包落数据段（宿主 strlen 等
+//   按字节读），而 VM 无字节级 LOAD；char 数组元素仍按 4 字节槽存放。
+// - 多级指针（int**）、多维数组（int a[2][3]）、指针数组（int* a[3]）不支持。
 //
 // 诊断策略：一次 analyze 收集全部诊断而非首错即停；已报错的子表达式用
 // Error 毒类型抑制级联。
@@ -140,18 +163,39 @@ private:
     SemanticType checkAssign(const AssignExpr& expr);
     SemanticType checkBinary(const BinaryExpr& expr);
     SemanticType checkUnary(const UnaryExpr& expr);
+    SemanticType checkAddressOf(const UnaryExpr& expr);   // &x
+    SemanticType checkDereference(const UnaryExpr& expr); // *p
     SemanticType checkCall(const CallExpr& expr);
+    SemanticType checkIndex(const IndexExpr& expr);
 
-    // 条件上下文（if/while/for 条件）：int/char 均可（非零为真），void 报错
+    // 条件上下文（if/while/for 条件）：标量/指针/NULL 均可（非零为真），void 报错
     void checkCondition(const Expr& expr);
 
-    // 检查 from 是否可隐式转换（含提升）为 to，不可则报错。
+    // 检查 from 是否可隐式转换（含提升/退化）为 to，不可则报错。
     // context 描述使用场景，如 "initialization of 'c'" / "return statement"。
     void checkConversion(SemanticType from,
                          SemanticType to,
                          int line,
                          int column,
                          const std::string& context);
+
+    // ---- 类型工具 ----
+    // 从声明的 类型名+指针层级+数组标记 计算语义类型；不合法组合（多级指针/
+    // 多维数组/指针数组/越界长度/void*）报错并返回 Error
+    SemanticType declaredType(const std::string& baseName,
+                              int pointerDepth,
+                              bool isArray,
+                              int arraySize,
+                              int arrayDims,
+                              int line,
+                              int column,
+                              bool report);
+    static SemanticType pointerTo(SemanticType t); // T → T*（不可构造返回 Error）
+    static SemanticType arrayOf(SemanticType t);   // T → T[]（不可构造返回 Error）
+    static SemanticType decayed(SemanticType t);   // T[] → T*，其余原样
+    static bool isPointer(SemanticType type);
+    static bool isArrayType(SemanticType type);
+    static bool isLValueExpr(const Expr& expr); // x / a[i] / *p
 
     // ---- return 覆盖检查（保守可达性策略） ----
     // - return 语句：必然返回
@@ -167,7 +211,6 @@ private:
     static SemanticType typeFromName(const std::string& name);
     static std::string typeName(SemanticType type);
     static bool isScalar(SemanticType type); // int 或 char
-
     std::string m_fileName;
     std::vector<Scope> m_scopes;
     SemanticResult m_result;

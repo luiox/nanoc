@@ -1,19 +1,19 @@
 #ifndef NCC_AST_H
 #define NCC_AST_H
 
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
 
 // AST节点类型枚举
 enum class ASTNodeType {
     // 程序
     PROGRAM,
-    
+
     // 声明
     VAR_DECLARATION,
     FUNC_DECLARATION,
-    
+
     // 语句
     COMPOUND_STMT,
     IF_STMT,
@@ -23,7 +23,7 @@ enum class ASTNodeType {
     BREAK_STMT,
     CONTINUE_STMT,
     EXPR_STMT,
-    
+
     // 表达式
     BINARY_EXPR,
     UNARY_EXPR,
@@ -32,7 +32,10 @@ enum class ASTNodeType {
     IDENTIFIER_EXPR,
     INTEGER_LITERAL,
     CHAR_LITERAL,
-    
+    STRING_LITERAL,
+    NULL_LITERAL,
+    INDEX_EXPR,
+
     // 其他
     PARAMETER,
     ARGUMENT
@@ -47,10 +50,10 @@ public:
     ASTNodeType type;
     int line;
     int column;
-    
+
     ASTNode(ASTNodeType t, int l, int c) : type(t), line(l), column(c) {}
     virtual ~ASTNode() = default;
-    
+
     virtual void accept(ASTVisitor& visitor) = 0;
 };
 
@@ -76,22 +79,30 @@ public:
 class Program : public ASTNode {
 public:
     std::vector<std::unique_ptr<Decl>> declarations;
-    
+
     Program(int l, int c) : ASTNode(ASTNodeType::PROGRAM, l, c) {}
-    
+
     void accept(ASTVisitor& visitor) override;
 };
 
 // 变量声明节点
+// 类型字段（PRD R1.2）：
+// - type：基础类型名（int/char/void）
+// - pointerDepth：指针层级（0=值，1=一级指针；≥2 由语义分析显式报不支持）
+// - isArray/arraySize/arrayDims：一维数组（arrayDims≥2 由语义分析显式报不支持）
 class VarDeclaration : public Decl {
 public:
     std::string type;
     std::string name;
+    int pointerDepth = 0;
+    bool isArray = false;
+    int arraySize = 0;
+    int arrayDims = 0;
     std::unique_ptr<Expr> initializer;
-    
+
     VarDeclaration(const std::string& t, const std::string& n, int l, int c)
-        : Decl(ASTNodeType::VAR_DECLARATION, l, c), type(t), name(n) {}
-    
+      : Decl(ASTNodeType::VAR_DECLARATION, l, c), type(t), name(n) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -99,13 +110,14 @@ public:
 class FuncDeclaration : public Decl {
 public:
     std::string returnType;
+    int returnPointerDepth = 0; // 返回类型指针层级（0=值，1=指针）
     std::string name;
     std::vector<std::unique_ptr<VarDeclaration>> parameters;
     std::unique_ptr<Stmt> body;
-    
+
     FuncDeclaration(const std::string& rt, const std::string& n, int l, int c)
-        : Decl(ASTNodeType::FUNC_DECLARATION, l, c), returnType(rt), name(n) {}
-    
+      : Decl(ASTNodeType::FUNC_DECLARATION, l, c), returnType(rt), name(n) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -113,9 +125,9 @@ public:
 class CompoundStmt : public Stmt {
 public:
     std::vector<std::unique_ptr<Stmt>> statements;
-    
+
     CompoundStmt(int l, int c) : Stmt(ASTNodeType::COMPOUND_STMT, l, c) {}
-    
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -125,9 +137,9 @@ public:
     std::unique_ptr<Expr> condition;
     std::unique_ptr<Stmt> thenBranch;
     std::unique_ptr<Stmt> elseBranch;
-    
+
     IfStmt(int l, int c) : Stmt(ASTNodeType::IF_STMT, l, c) {}
-    
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -136,9 +148,9 @@ class WhileStmt : public Stmt {
 public:
     std::unique_ptr<Expr> condition;
     std::unique_ptr<Stmt> body;
-    
+
     WhileStmt(int l, int c) : Stmt(ASTNodeType::WHILE_STMT, l, c) {}
-    
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -149,9 +161,9 @@ public:
     std::unique_ptr<Expr> condition;
     std::unique_ptr<Expr> increment;
     std::unique_ptr<Stmt> body;
-    
+
     ForStmt(int l, int c) : Stmt(ASTNodeType::FOR_STMT, l, c) {}
-    
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -159,9 +171,9 @@ public:
 class ReturnStmt : public Stmt {
 public:
     std::unique_ptr<Expr> value;
-    
+
     ReturnStmt(int l, int c) : Stmt(ASTNodeType::RETURN_STMT, l, c) {}
-    
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -169,7 +181,7 @@ public:
 class BreakStmt : public Stmt {
 public:
     BreakStmt(int l, int c) : Stmt(ASTNodeType::BREAK_STMT, l, c) {}
-    
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -177,7 +189,7 @@ public:
 class ContinueStmt : public Stmt {
 public:
     ContinueStmt(int l, int c) : Stmt(ASTNodeType::CONTINUE_STMT, l, c) {}
-    
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -185,22 +197,27 @@ public:
 class ExprStmt : public Stmt {
 public:
     std::unique_ptr<Expr> expression;
-    
+
     ExprStmt(int l, int c) : Stmt(ASTNodeType::EXPR_STMT, l, c) {}
-    
+
     void accept(ASTVisitor& visitor) override;
 };
 
 // 变量声明语句节点（用于在语句上下文中声明变量）
+// 字段语义与 VarDeclaration 相同（指针/数组扩展见其注释）
 class StmtVarDeclaration : public Stmt {
 public:
     std::string type;
     std::string name;
+    int pointerDepth = 0;
+    bool isArray = false;
+    int arraySize = 0;
+    int arrayDims = 0;
     std::unique_ptr<Expr> initializer;
-    
+
     StmtVarDeclaration(const std::string& t, const std::string& n, int l, int c)
-        : Stmt(ASTNodeType::VAR_DECLARATION, l, c), type(t), name(n) {}
-    
+      : Stmt(ASTNodeType::VAR_DECLARATION, l, c), type(t), name(n) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -210,9 +227,10 @@ public:
     std::string op;
     std::unique_ptr<Expr> left;
     std::unique_ptr<Expr> right;
-    
-    BinaryExpr(const std::string& o, int l, int c) : Expr(ASTNodeType::BINARY_EXPR, l, c), op(o) {}
-    
+
+    BinaryExpr(const std::string& o, int l, int c)
+      : Expr(ASTNodeType::BINARY_EXPR, l, c), op(o) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -221,20 +239,24 @@ class UnaryExpr : public Expr {
 public:
     std::string op;
     std::unique_ptr<Expr> operand;
-    
-    UnaryExpr(const std::string& o, int l, int c) : Expr(ASTNodeType::UNARY_EXPR, l, c), op(o) {}
-    
+
+    UnaryExpr(const std::string& o, int l, int c)
+      : Expr(ASTNodeType::UNARY_EXPR, l, c), op(o) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
 // 赋值表达式节点
+// target 是左值表达式：IdentifierExpr（x = v）、IndexExpr（a[i] = v）或
+// 解引用 UnaryExpr（*p = v）；解析器只接受这三种形式
 class AssignExpr : public Expr {
 public:
-    std::string name;
+    std::unique_ptr<Expr> target;
     std::unique_ptr<Expr> value;
-    
-    AssignExpr(const std::string& n, int l, int c) : Expr(ASTNodeType::ASSIGN_EXPR, l, c), name(n) {}
-    
+
+    AssignExpr(std::unique_ptr<Expr> t, int l, int c)
+      : Expr(ASTNodeType::ASSIGN_EXPR, l, c), target(std::move(t)) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -243,9 +265,10 @@ class CallExpr : public Expr {
 public:
     std::string callee;
     std::vector<std::unique_ptr<Expr>> arguments;
-    
-    CallExpr(const std::string& calleeName, int l, int c) : Expr(ASTNodeType::CALL_EXPR, l, c), callee(calleeName) {}
-    
+
+    CallExpr(const std::string& calleeName, int l, int c)
+      : Expr(ASTNodeType::CALL_EXPR, l, c), callee(calleeName) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -253,9 +276,10 @@ public:
 class IdentifierExpr : public Expr {
 public:
     std::string name;
-    
-    IdentifierExpr(const std::string& n, int l, int c) : Expr(ASTNodeType::IDENTIFIER_EXPR, l, c), name(n) {}
-    
+
+    IdentifierExpr(const std::string& n, int l, int c)
+      : Expr(ASTNodeType::IDENTIFIER_EXPR, l, c), name(n) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -263,9 +287,10 @@ public:
 class IntegerLiteral : public Expr {
 public:
     int value;
-    
-    IntegerLiteral(int v, int l, int c) : Expr(ASTNodeType::INTEGER_LITERAL, l, c), value(v) {}
-    
+
+    IntegerLiteral(int v, int l, int c)
+      : Expr(ASTNodeType::INTEGER_LITERAL, l, c), value(v) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -273,9 +298,42 @@ public:
 class CharLiteral : public Expr {
 public:
     char value;
-    
+
     CharLiteral(char v, int l, int c) : Expr(ASTNodeType::CHAR_LITERAL, l, c), value(v) {}
-    
+
+    void accept(ASTVisitor& visitor) override;
+};
+
+// 字符串字面量节点（PRD R1.2）：语义类型为 char*，codegen 落数据段
+// value 保留引号内的原文，转义序列原样保留，由汇编器解码
+class StringLiteral : public Expr {
+public:
+    std::string value;
+
+    StringLiteral(const std::string& v, int l, int c)
+      : Expr(ASTNodeType::STRING_LITERAL, l, c), value(v) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
+// NULL 空指针常量节点（PRD R1.2）：语义类型为 Null，可赋给任意指针类型
+class NullLiteral : public Expr {
+public:
+    NullLiteral(int l, int c) : Expr(ASTNodeType::NULL_LITERAL, l, c) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
+// 下标表达式节点：base[index]，base 为数组或指针表达式
+// 既作右值（a[i]）也作左值（a[i] = v，经 AssignExpr.target）
+class IndexExpr : public Expr {
+public:
+    std::unique_ptr<Expr> base;
+    std::unique_ptr<Expr> index;
+
+    IndexExpr(std::unique_ptr<Expr> b, int l, int c)
+      : Expr(ASTNodeType::INDEX_EXPR, l, c), base(std::move(b)) {}
+
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -283,7 +341,7 @@ public:
 class ASTVisitor {
 public:
     virtual ~ASTVisitor() = default;
-    
+
     virtual void visit(Program& node) = 0;
     virtual void visit(VarDeclaration& node) = 0;
     virtual void visit(FuncDeclaration& node) = 0;
@@ -302,6 +360,9 @@ public:
     virtual void visit(IdentifierExpr& node) = 0;
     virtual void visit(IntegerLiteral& node) = 0;
     virtual void visit(CharLiteral& node) = 0;
+    virtual void visit(StringLiteral& node) = 0;
+    virtual void visit(NullLiteral& node) = 0;
+    virtual void visit(IndexExpr& node) = 0;
     virtual void visit(StmtVarDeclaration& node) = 0;
 };
 
