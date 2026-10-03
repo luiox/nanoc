@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已确认（两轮评审）；2026-10-03 进度对账：M0–M2 已交付，M3 进行中，M4 部分交付 |
+| 状态 | 已确认（两轮评审）；2026-10-03 终轮对账：M0–M5、M7 已交付，M6（coro）进行中 |
 | 日期 | 2026-09-28 |
 | 范围 | R0–R14 共 15 项需求，8 个里程碑 |
 | 配套 | `doc/开发计划 NCIv2.1.md`（部分被本文取代，见附录 A）、`doc/Bytecode Format Specification v2.1.md`（继续有效） |
@@ -36,7 +36,7 @@ NanoC 是一个教学向 C 子集语言，现有链路为「ncc → .nas 汇编�
 
 以下问题均已实地验证（2026-09-28，工作区 `main@c637956`，Windows/MSVC 2022）。
 
-**2026-10-03 对账：S1–S10 已全部解决，S11 环境就绪、待 R6 后端开发**（解决 PR 逐项见状态列）。
+**2026-10-03 终轮对账：S1–S11 已全部解决**（解决 PR 逐项见状态列）。
 
 | # | 问题 | 证据 | 影响 | 状态（2026-10-03） |
 |---|---|---|---|---|
@@ -50,9 +50,9 @@ NanoC 是一个教学向 C 子集语言，现有链路为「ncc → .nas 汇编�
 | S8 | 语言只有 int 级子集：无字符串字面量、指针、`&`、数组、struct、typedef | `ncc/lexer.hpp:25-27`（仅 INTEGER/CHAR_CONSTANT）、`ncc/parser.cpp`（无 `*`/`[`/`&` 解析） | 无法表达 C ABI，`printf(char*)` 不可能 | ✅ PR #41：字符串字面量/指针/一维数组；PR #44：struct/typedef |
 | S9 | nas 无数据段：`dataSize` 硬编码 0，无 `db` 指令 | `nas/main.cpp:86`、`nas/instruction.cpp` | 字符串常量无处安放，VM 后端无法做 extern 调用 | ✅ PR #34：nas 产出 v2.1 完整目标文件（数据段/导入导出表） |
 | S10 | 文档三份互不一致 | 需求设计文档说"27 条+trap 系统调用"；开发计划说"~50 条无 syscall"；Bytecode 规范 v2.1 为准则 | 参照系混乱 | ✅ PR #36：v2.1 术语/表布局对齐；本轮：PRD/开发计划/README/AGENTS 全面进度对账 |
-| S11 | 本机无 LLVM | `clang/llc/llvm-config` 均未安装；有 MSVC 2022 + cmake 4.3.3 | LLVM 后端需先解决环境 | ⏳ 环境就绪：LLVM 官方预编译包已下载安装，R6 后端开发中（M3） |
+| S11 | 本机无 LLVM | `clang/llc/llvm-config` 均未安装；有 MSVC 2022 + cmake 4.3.3 | LLVM 后端需先解决环境 | ✅ PR #55：官方预编译包安装；后端交付（`ir::Module` → .ll，`NANOC_LLVM_DIR`/PATH llc 探测，CI 经 Chocolatey 装 LLVM） |
 
-**结论（2026-09-28 原判定，已兑现）：M0 先修链路（S1–S5、S9），再谈新后端与新特性——M0–M2 已全部交付。**
+**结论（2026-09-28 原判定，已兑现）：M0 先修链路（S1–S5、S9），再谈新后端与新特性——M0–M5、M7 已全部交付，M6 进行中。**
 
 ---
 
@@ -84,7 +84,7 @@ IR（R1，带类型、可 dump 文本）
 
 | 能力 | B0 NAS/VM | B1 C | B2 LLVM |
 |---|---|---|---|
-| 数据段/字符串常量 | 需补 `db` + 数据段（S9） | 天然支持 | 天然支持 |
+| 数据段/字符串常量 | ✅ `db`/`dw`/`dd` + 数据段（S9，#34） | 天然支持 | 天然支持 |
 | extern 调用 | CALLX + 导入表 | `#include`/声明 | `declare` |
 | 多文件链接 | **自带链接器**（NCI 头 import/export 表） | 系统链接器 | 系统链接器 |
 | 独立运行 | 需 nvm | ✅ 原生 exe | ✅ 原生 exe |
@@ -113,14 +113,14 @@ IR（R1，带类型、可 dump 文本）
 | R3 | extern 声明（C ABI） | P0 | R1 | M2 | ✅ #52（C 后端带签名原型、printf 可用；VM 侧 cdecl 发射 + msvcrt 真宿主 e2e；VM printf 包装器仍属 P2） |
 | R4 | C 后端 `--emit=c` | P0 | R1 | M2 | ✅ #47（emit + C/VM 差分验收）+ #52（CLI 接线） |
 | R5 | xmake `rule("nanoc")` | P0 | R2a, R4 | M2 | ✅ #51（rule + hello_project 样例 + 接入指南） |
-| R6 | LLVM 后端 `--emit=obj\|exe` | P0 | R1 | M3 | ⏳ 进行中（LLVM 环境就绪，后端开发中） |
-| R7 | 独立编译 + 链接（含 VM 链接器） | P1 | R2a, R6 | M4 | 🔶 VM 链接器已交付（#40 `nas -r`）；独立编译产物/增量进行中 |
-| R8 | xmake 完整 `toolchain("nanoc")` | P1 | R6, R7 | M4 | ⏳ 未开始（前置 R6/R7） |
-| R10 | defer | P1 | R1 | M5 | ⏳ 未开始（#45 IR 层已预留展开点） |
-| R11 | 模式匹配 match | P1 | R1 | M5 | ⏳ 未开始（#45 IR 层已预留降解） |
-| R12 | 协程 coro/yield（状态机） | P1 | R10 | M6 | ⏳ 未开始（#45 IR 层已预留） |
-| R9 | include C 头文件（声明子集） | P1 | R1（可与 M5/M6 并行） | M7 | ⏳ 未开始 |
-| R13 | 三后端差分测试框架 | P0 | R4, R6 | M4（起） | 🔶 框架就绪 #50（13 程序 × vm/c 矩阵、skip 策略、锚点断言）；待 R6 接入 LLVM 列 |
+| R6 | LLVM 后端 `--emit=obj\|exe` | P0 | R1 | M3 | ✅ #55（`ir::Module` → 文本 .ll；CLI `--emit=llvm\|obj\|exe` 接线；`NANOC_LLVM_DIR` 探测；差分矩阵 llvm 列接入） |
+| R7 | 独立编译 + 链接（含 VM 链接器） | P1 | R2a, R6 | M4 | ✅ #40（VM 链接器 `nas -r`：段合并/重定位/符号解析）+ #54（`loadStandalone` 轻装载独立编译、跨模块链接 e2e、`-MMD` 依赖追踪） |
+| R8 | xmake 完整 `toolchain("nanoc")` | P1 | R6, R7 | M4 | ✅ #56（`toolchain("nanoc")` + `ncc-separate` 独立编译驱动 + toolchain_project 样例 + `doc/xmake-toolchain.md`） |
+| R10 | defer | P1 | R1 | M5 | ✅ #57（词法/语法/语义检查 + IR 层展开，三后端免费获得） |
+| R11 | 模式匹配 match | P1 | R1 | M5 | ✅ #57（常量/区间/多值/守卫/通配五类模式，IR 降解为比较+跳转链） |
+| R12 | 协程 coro/yield（状态机） | P1 | R10 | M6 | ⏳ 进行中（M6 开发中，R10 defer 展开基建已就绪） |
+| R9 | include C 头文件（声明子集） | P1 | R1（可与 M5/M6 并行） | M7 | ✅ #58（预处理 + 头文件声明子集解析 + 语义原型合并，三后端可用） |
+| R13 | 三后端差分测试框架 | P0 | R4, R6 | M4（起） | ✅ #50 框架 + #55 llvm 列：13 程序 × vm/c/llvm 三列（后端可用性动态探测、skip 策略、锚点断言）；defer/match 差分行复用 harness（#57） |
 
 ---
 
@@ -133,7 +133,7 @@ IR（R1，带类型、可 dump 文本）
 - **R0.1 修复测试体系**：`tests` 目标可编译；`test_instructions.cpp` 重写为适配 `nas/instruction.cpp` 现有 API；移除 `xmake.lua:39` 失效引用；全部历史可救测试转绿。
 - **R0.2 三方指令集对齐**：ncc codegen 输出改为 NCI v2.1 助记符（`trap`→`leave/ret`+extern exit、`jic`→`jz`+`cmp`、`eq/gt/le…`→`cmp`+条件跳转、`[BP-n]` 间接寻址→汇编器可接受的语法、立即数加减→`addi/subi`）。以 `doc/Bytecode Format Specification v2.1.md` 为唯一参照（S10 由本文裁决）。
 - **R0.3 VM 修复**：POP 归位 `0x42`、补 PUSHI/JN/JP/LOADA/STOREA/ANDI/ORI/XORI/SHLI/SHRI handler。
-- **R0.4 ncc CLI**：`ncc <files...> [-o out] [--emit=asm|c|llvm|obj|exe] [-MMD -MF file.d] [--target-dir dir]`；`nas`/`nvm` CLI 对齐（扩展名统一 `.nci`，`nvm` 支持 `--Xss`）。
+- **R0.4 ncc CLI**：`ncc <files...> [-o out] [--emit=asm|c|llvm|obj|exe] [-MMD -MF file.d] [--dump-ir] [--version]`（实际交付口径；`nas`/`nvm` CLI 对齐，扩展名统一 `.nci`，`nvm` 支持 `--Xss` 与 `--host-lib`）。
 - **R0.5 端到端黄金测试**：`examples/hello.nc` 全链路（ncc→nas→nvm）跑通并断言退出码/输出；examples 5 例全部纳入。
 - **R0.6 libca 接入**：xmake 拉取 libca 包并编译通过（R14 起点，见 3.3）。
 
@@ -208,17 +208,17 @@ extern int printf(char* fmt, ...);   // varargs：C 后端天然支持
 
 ### R6 LLVM 后端（M3）
 
-- **选型（开放问题 O1，实施前裁决）**：官方预编译 Windows 包 + `llvm-config` 探测；备选 xmake-repo `llvm` 包。绑定 MSVC target（`x86_64-pc-windows-msvc`）。
-- `ncc --emit=llvm`（文本 .ll）、`--emit=obj`（目标文件）、`--emit=exe`（调用系统 link/lld 链接）。
-- IR → LLVM IR 映射：SSA 由 LLVM 管（mem2reg），NanoC IR 保持非 SSA。
-- 环境文档：`doc/llvm-setup.md`（安装、探测、CI 注意事项）。
+- **选型（开放问题 O1，已裁决）**：官方预编译 Windows 包；工具链探测 = 环境变量 `NANOC_LLVM_DIR` > PATH 上的 `llc` > 本机参考 SDK 路径（口径见 `ncc/src/ncc/llvm_backend.hpp` 头注）。
+- `ncc --emit=llvm`（文本 .ll）、`--emit=obj`（目标文件）、`--emit=exe`（链接首选 lld-link、回退 clang 驱动）。
+- IR → LLVM IR 映射：SSA 由 LLVM 管（mem2reg），NanoC IR 保持非 SSA；opaque pointers（LLVM 15+）。
+- **交付（PR #55）**：后端与 CLI 接线落地；无 LLVM 环境时 `--emit=obj|exe` 给出含安装指引的明确报错；CI（windows-latest）经 Chocolatey 安装 LLVM，llvm 差分列真跑。
 
 **验收**：examples 经 LLVM 后端产出 exe，运行结果与 C/VM 后端一致；无 LLVM 环境时 `--emit=llvm` 给出明确报错提示。
 
 ### R7 独立编译 + 链接（M4）
 
 - **二期编译模型**：每模块独立产出中间产物（C 后端 = .c；LLVM 后端 = .o；VM 后端 = .nci 对象）。
-- **VM 链接器**：复用 NCI v2.1 头预留的 `importCount/exportCount` 字段（`doc/Bytecode Format Specification v2.1.md:20`），填充导入表（符号→地址重定位）与导出表；实现 `nas -r` 或独立 `nln` 链接命令；完成后 VM 才支持多模块 + extern 导入。
+- **VM 链接器**：复用 NCI v2.1 头预留的 `importCount/exportCount` 字段（`doc/Bytecode Format Specification v2.1.md:20`），填充导入表（符号→地址重定位）与导出表；已交付 `nas -r` 链接命令（#40，段合并/重定位/符号解析，见规范 §2.2）。
 - C/LLVM 后端链接交系统链接器，ncc 只负责 emit 各模块的外部声明。
 - 增量：`.d` 依赖文件 + xmake 已有文件追踪，改一模块只重编该模块。
 
@@ -286,7 +286,7 @@ extern int printf(char* fmt, ...);   // varargs：C 后端天然支持
 
 - 测试矩阵：{examples + 新增特性用例} × {B0, B1, B2} → 断言退出码与 stdout 一致。
 - 后端可用性动态探测（无 LLVM 环境自动跳过 B2 并标记 skip 而非失败）。
-- 作为 CI 主干（后续接 GitHub Actions）。
+- 已接入 GitHub Actions CI（`.github/workflows/ci.yml`：windows-latest，构建 + 全量测试，含 LLVM 工具链安装与 llvm 差分列）。
 
 ### R14 实现基座 libca（M0 起，贯穿）
 
@@ -323,16 +323,18 @@ M0 存量修复与端到端（R0, R14）
      └─ M7 外部库：include C 头文件（R9）※与 M5/M6 并行
 ```
 
-| 里程碑 | 完成标志 | 状态（2026-10-03） |
+| 里程碑 | 完成标志 | 状态（2026-10-03 终轮） |
 |---|---|---|
-| M0 | `xmake build && xmake run tests` 全绿；hello.nc 端到端跑通；libca 包接入 | ✅ 已完成（#25/#30/#31/#32/#37/#39 + libca #27；tests 392 项全绿） |
+| M0 | `xmake build && xmake run tests` 全绿；hello.nc 端到端跑通；libca 包接入 | ✅ 已完成（#25/#30/#31/#32/#37/#39 + libca #27） |
 | M1 | 语义错误负例全捕获；4 文件 import 工程整体编译；IR dump 可读 | ✅ 已完成（#38/#41/#44/#45/#46/#48） |
 | M2 | **样例工程一条 `xmake` 命令产出 exe（C 后端）**；printf 可调用 | ✅ 已完成（#47/#51/#52：rule 一条命令出 exe；extern 真调 msvcrt） |
-| M3 | `ncc --emit=exe` 产出原生 exe；三后端结果一致 | ⏳ 进行中（R6 后端开发中，LLVM 环境就绪；R13 差分框架已就绪） |
-| M4 | 独立编译+增量；`set_toolchains("nanoc")` 可用；差分矩阵跑绿 | 🔶 部分（VM 链接器 #40 + R13 框架 #50 已交付；独立编译与 toolchain 进行中） |
-| M5 | defer/match 特性用例三后端一致 | ⏳ 未开始 |
-| M6 | 协程迭代器示例三后端一致 | ⏳ 未开始 |
-| M7 | `#include "x.h"` 声明子集可用 | ⏳ 未开始 |
+| M3 | `ncc --emit=exe` 产出原生 exe；三后端结果一致 | ✅ 已完成（#55：LLVM 后端 + CLI 接线；差分矩阵 llvm 列三后端一致） |
+| M4 | 独立编译+增量；`set_toolchains("nanoc")` 可用；差分矩阵跑绿 | ✅ 已完成（#40 `nas -r` + #54 独立编译/链接 e2e + #56 toolchain + #50/#55 差分矩阵 vm/c/llvm） |
+| M5 | defer/match 特性用例三后端一致 | ✅ 已完成（#57：语义/IR/VM/三后端差分 28 项） |
+| M6 | 协程迭代器示例三后端一致 | ⏳ 进行中（开发分支进行中） |
+| M7 | `#include "x.h"` 声明子集可用 | ✅ 已完成（#58：预处理 + 声明子集 + 语义原型合并） |
+
+> 当前测试基线：**465 项全绿**（48 个测试套件，含差分矩阵 vm/c/llvm 三列）。
 
 ---
 
@@ -350,7 +352,7 @@ M0 存量修复与端到端（R0, R14）
 
 | # | 项 | 类型 | 处理 |
 |---|---|---|---|
-| O1 | LLVM 获取方式：官方预编译包 vs xmake-repo `llvm` 包（体积大、网络、版本固定） | 开放 | M3 启动前裁决，写入 `doc/llvm-setup.md` |
+| O1 | LLVM 获取方式：官方预编译包 vs xmake-repo `llvm` 包（体积大、网络、版本固定） | 已裁决 | ✅ 落地官方预编译包 + `NANOC_LLVM_DIR`/PATH llc 探测（#55）；未单独成文 llvm-setup.md，口径见 `llvm_backend.hpp` 头注与 `.github/workflows/ci.yml` |
 | O2 | C 头文件子集边界易失控（预处理器是无底洞） | 风险 | R9 明确"不做"清单；以解析自写 C 库为验收上限 |
 | O3 | 协程×defer 交互复杂 | 风险 | 已用硬约束规避（yield 不得跨 pending defer），M6 首个负例 |
 | O4 | VM 链接器 + 数据段是被低估的存量缺口（S9 + NCI 导入导出表） | 风险 | 拆进 R7 独立 issue，不与其他里程碑混排 |
