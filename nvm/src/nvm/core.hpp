@@ -231,16 +231,5 @@ private:
     // 下一个可分配的宿主地址，从 HOST_ADDRESS_BASE 起递增
     int32_t m_nextHostAddr;
 };
-void Nvm_init(struct Nvm * vm, int64_t stack_size);
-
-void Nvm_destroy(struct Nvm * vm);
-
-void Nvm_load_file(struct Nvm * vm, char * file_name);
-
-void Nvm_run(struct Nvm * vm);
-
-void Nvm_print_info(struct Nvm * vm);
-
-void Nvm_print_stack_info(struct Nvm * vm, int64_t start, int64_t end);
 
 #endif // !NVM_CORE_H

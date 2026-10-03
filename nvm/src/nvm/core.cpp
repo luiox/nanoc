@@ -95,8 +95,6 @@ NVirtualMachine::load(std::string filename)
         m_pc = 0;
         data = NULL;
     }
-    if (data)
-        free(data);
 }
 
 // 严格 v2.1 加载：header(32B) | code | data | import table | export table
