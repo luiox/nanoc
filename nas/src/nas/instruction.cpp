@@ -426,6 +426,71 @@ public:
     }
 };
 
+// ============================================================================
+// Compare Instructions
+// ============================================================================
+
+class CMP : public Instruction
+{
+    uint8_t dest, src;
+
+public:
+    CMP(uint8_t d, uint8_t s)
+      : Instruction(NOpcode::CMP)
+      , dest(d)
+      , src(s)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(dest);
+        bytes.push_back(src);
+    }
+};
+
+class CMPI : public Instruction
+{
+    uint8_t reg;
+    int32_t val;
+
+public:
+    CMPI(uint8_t r, int32_t v)
+      : Instruction(NOpcode::CMPI)
+      , reg(r)
+      , val(v)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(reg);
+        write32(bytes, val);
+    }
+};
+
+class TEST : public Instruction
+{
+    uint8_t dest, src;
+
+public:
+    TEST(uint8_t d, uint8_t s)
+      : Instruction(NOpcode::TEST)
+      , dest(d)
+      , src(s)
+    {
+    }
+    void
+    emit() override
+    {
+        bytes.push_back(static_cast<uint8_t>(opcode));
+        bytes.push_back(dest);
+        bytes.push_back(src);
+    }
+};
+
 class NOT : public Instruction
 {
     uint8_t reg;
@@ -1120,6 +1185,12 @@ Assembler::parseLine(const std::string & line)
         return std::make_unique<MOD>(parseRegister(arg1), parseRegister(arg2));
     if (op == "modi")
         return std::make_unique<MODI>(parseRegister(arg1), parseInt(arg2));
+    if (op == "cmp")
+        return std::make_unique<CMP>(parseRegister(arg1), parseRegister(arg2));
+    if (op == "cmpi")
+        return std::make_unique<CMPI>(parseRegister(arg1), parseInt(arg2));
+    if (op == "test")
+        return std::make_unique<TEST>(parseRegister(arg1), parseRegister(arg2));
     if (op == "not")
         return std::make_unique<NOT>(parseRegister(arg1));
     if (op == "neg")
