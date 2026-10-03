@@ -21,6 +21,8 @@ void Lexer::initKeywords() {
     m_keywords["NULL"] = NTokenKind::KEYWORD_NULL;
     m_keywords["struct"] = NTokenKind::KEYWORD_STRUCT;
     m_keywords["typedef"] = NTokenKind::KEYWORD_TYPEDEF;
+    m_keywords["import"] = NTokenKind::KEYWORD_IMPORT;
+    m_keywords["export"] = NTokenKind::KEYWORD_EXPORT;
 }
 
 char Lexer::currentChar() const {

@@ -48,6 +48,17 @@ enum class ASTNodeType {
 // 前向声明
 class ASTVisitor;
 
+// import 指令（PRD R2a 多文件整体编译）：
+// - `import math;` → target = "math"，quoted = false（装载器解析为导入者同目录 math.nc）
+// - `import "util/helpers.nc";` → target = "util/helpers.nc"，quoted =
+// true（相对导入者目录） 仅允许出现在文件顶部（其他位置由解析器报错，带行号）
+struct ImportDirective {
+    std::string target;
+    bool quoted = false;
+    int line = 0;
+    int column = 0;
+};
+
 // AST节点基类
 class ASTNode {
 public:
@@ -76,6 +87,11 @@ public:
 // 声明基类
 class Decl : public ASTNode {
 public:
+    // 定义所在文件（PRD R2a）：多文件装载器合并编译单元时逐条标注；
+    // 空 = 单文件模式（直接经 Parser 使用，如既有测试），语义/代码生成按
+    // 既有单文件行为处理
+    std::string sourceFile;
+
     Decl(ASTNodeType t, int l, int c) : ASTNode(t, l, c) {}
 };
 
@@ -83,6 +99,7 @@ public:
 class Program : public ASTNode {
 public:
     std::vector<std::unique_ptr<Decl>> declarations;
+    std::vector<ImportDirective> imports; // 文件顶部 import 指令（按出现顺序）
 
     Program(int l, int c) : ASTNode(ASTNodeType::PROGRAM, l, c) {}
 
@@ -104,6 +121,7 @@ public:
     bool isArray = false;
     int arraySize = 0;
     int arrayDims = 0;
+    bool isExported = false; // export 修饰的顶层全局变量（PRD R2a；局部/成员恒为 false）
     std::unique_ptr<Expr> initializer;
 
     VarDeclaration(const std::string& t, const std::string& n, int l, int c)
@@ -120,6 +138,7 @@ public:
     int returnPointerDepth = 0;  // 返回类型指针层级（0=值，1=指针）
     std::string name;
     std::vector<std::unique_ptr<VarDeclaration>> parameters;
+    bool isExported = false; // export 修饰的顶层函数（PRD R2a）
     std::unique_ptr<Stmt> body;
 
     FuncDeclaration(const std::string& rt, const std::string& n, int l, int c)
