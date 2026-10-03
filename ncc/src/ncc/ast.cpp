@@ -82,3 +82,6 @@ void DeferStmt::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 
 // MatchExpr节点的accept实现（PRD R11；追加在文件尾）
 void MatchExpr::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+
+// YieldStmt节点的accept实现（PRD R12；追加在文件尾）
+void YieldStmt::accept(ASTVisitor& visitor) { visitor.visit(*this); }

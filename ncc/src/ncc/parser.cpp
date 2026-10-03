@@ -163,7 +163,7 @@ ImportDirective Parser::parseImportDirective() {
     return directive;
 }
 
-std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported) {
+std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported, bool isCoro) {
     // export 前缀（PRD R2a）：递归解析声明并校验目标种类——只允许顶层
     // 函数与全局变量；struct/typedef 不支持导出
     if (!isExported && currentToken().kind == NTokenKind::KEYWORD_EXPORT) {
@@ -175,12 +175,35 @@ std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported) {
         if (currentToken().kind == NTokenKind::KEYWORD_EXTERN) {
             errorAt(exportToken, "'export' cannot be applied to 'extern' declarations");
         }
-        auto decl = parseDeclaration(true);
+        auto decl = parseDeclaration(true, isCoro);
         if (decl->type == ASTNodeType::STRUCT_DECLARATION
             || decl->type == ASTNodeType::TYPEDEF_DECLARATION) {
             errorAt(exportToken,
                     "'export' can only be applied to top-level functions and global "
                     "variables");
+        }
+        return decl;
+    }
+
+    // coro 前缀（PRD R12）：递归解析声明并校验目标——只允许函数声明。
+    // 顺序约定：`export coro` 合法（export 先解析后递归携带 isCoro），
+    // `coro export` 拒绝（提示正确顺序）
+    if (!isCoro && currentToken().kind == NTokenKind::KEYWORD_CORO) {
+        const Token coroToken = currentToken();
+        advance();
+        if (currentToken().kind == NTokenKind::KEYWORD_CORO) {
+            errorAt(coroToken, "duplicate 'coro'");
+        }
+        if (currentToken().kind == NTokenKind::KEYWORD_EXPORT) {
+            errorAt(coroToken,
+                    "'coro' cannot precede 'export'; write 'export coro int f(...)'");
+        }
+        if (currentToken().kind == NTokenKind::KEYWORD_EXTERN) {
+            errorAt(coroToken, "'coro' cannot be applied to 'extern' declarations");
+        }
+        auto decl = parseDeclaration(isExported, true);
+        if (decl == nullptr || decl->type != ASTNodeType::FUNC_DECLARATION) {
+            errorAt(coroToken, "'coro' can only be applied to function declarations");
         }
         return decl;
     }
@@ -253,7 +276,7 @@ std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported) {
             }
             // 函数声明
             m_pos = startPos; // 回退
-            auto funcDecl = parseFuncDeclaration();
+            auto funcDecl = parseFuncDeclaration(isCoro);
             if (isExported) {
                 funcDecl->isExported = true;
             }
@@ -675,7 +698,7 @@ std::unique_ptr<Stmt> Parser::parseVarDeclarationStmt() {
     return varDecl;
 }
 
-std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
+std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration(bool isCoro) {
     // 获取返回类型（builtin 或 struct Tag）
     bool returnIsStruct = false;
     int line = 0;
@@ -700,6 +723,7 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     auto funcDecl = std::make_unique<FuncDeclaration>(returnType, name, line, column);
     funcDecl->returnIsStruct = returnIsStruct;
     funcDecl->returnPointerDepth = returnPointerDepth;
+    funcDecl->isCoro = isCoro; // PRD R12：coro 修饰的协程函数
 
     // 解析参数列表
     expect(NTokenKind::DELIMITER_LPAREN);
@@ -999,6 +1023,10 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     case NTokenKind::KEYWORD_DEFER:
         // defer 语句（PRD R10；追加在既有语句分发链之后）
         return parseDeferStatement();
+    case NTokenKind::KEYWORD_YIELD:
+        // yield 语句（PRD R12；追加在既有语句分发链之后，仅在 coro 函数内
+        // 合法——语义层裁决）
+        return parseYieldStatement();
     default:
         return parseExprStatement();
     }
@@ -1581,4 +1609,21 @@ std::unique_ptr<MatchPattern> Parser::parseMatchPattern() {
 
     error("invalid match pattern");
     return nullptr;
+}
+
+// yield 语句（PRD R12）：`yield <表达式>;`。yield 必须带值（挂起即产出；
+// 完成态的返回值由 return 承担）。仅 coro 函数体内合法——语义层裁决。
+std::unique_ptr<Stmt> Parser::parseYieldStatement() {
+    int line = currentToken().line;
+    int column = currentToken().column;
+
+    expect(NTokenKind::KEYWORD_YIELD);
+
+    auto yieldStmt = std::make_unique<YieldStmt>(line, column);
+    if (currentToken().kind == NTokenKind::DELIMITER_SEMICOLON) {
+        errorAt(currentToken(), "yield requires a value expression");
+    }
+    yieldStmt->value = parseExpression();
+    expect(NTokenKind::DELIMITER_SEMICOLON);
+    return yieldStmt;
 }

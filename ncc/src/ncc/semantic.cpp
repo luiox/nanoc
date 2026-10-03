@@ -165,6 +165,8 @@ SemanticAnalyzer::analyze(const Program& program) {
     m_globalByName.clear();
     m_currentFile.clear();
     m_scopes.emplace_back(); // 作用域 0：全局（顶层符号另登记于 m_globalSymbols）
+    m_pendingDefers.clear();
+    m_pendingDefers.push_back(0);
     m_currentFunction = nullptr;
     m_loopDepth = 0;
     m_deferDepth = 0;
@@ -219,9 +221,15 @@ SemanticAnalyzer::analyze(const Program& program) {
 
 SemanticAnalyzer::Scope& SemanticAnalyzer::currentScope() { return m_scopes.back(); }
 
-void SemanticAnalyzer::pushScope() { m_scopes.emplace_back(); }
+void SemanticAnalyzer::pushScope() {
+    m_scopes.emplace_back();
+    m_pendingDefers.push_back(0); // 与作用域栈平行（R12 pending defer 跟踪）
+}
 
-void SemanticAnalyzer::popScope() { m_scopes.pop_back(); }
+void SemanticAnalyzer::popScope() {
+    m_scopes.pop_back();
+    m_pendingDefers.pop_back();
+}
 
 const Symbol* SemanticAnalyzer::lookupSymbol(const std::string& name) const {
     // 由内向外逐层查找；每层先查变量表再查函数表
@@ -549,6 +557,17 @@ void SemanticAnalyzer::registerTypedefDeclaration(const TypedefDeclaration& decl
 // ---- 声明登记 ----
 
 void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
+    // coro 内建名（PRD R12）保留：coro_create/coro_resume/coro_done 由编译器
+    // 内建实现，用户不得定义同名符号（避免内建分派歧义）
+    if (decl.name == "coro_create" || decl.name == "coro_resume"
+        || decl.name == "coro_done") {
+        reportError(decl.line,
+                    decl.column,
+                    "'" + decl.name
+                      + "' is a built-in coro operation and cannot be "
+                        "redefined");
+        return;
+    }
     Symbol symbol;
     symbol.kind = SymbolKind::Function;
     symbol.name = decl.name;
@@ -569,6 +588,13 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
                     "function '" + decl.name + "' has incomplete return type 'struct "
                       + returnType.tag + "'");
     }
+    // coro 函数（PRD R12）返回类型一期限定 int：yield 产出值 / resume 返回值 /
+    // 完成态返回值共用同一通道（帧 __retval 字段为 int；朴素方案，PR 记录）
+    if (decl.isCoro && returnType.kind != SemanticType::Kind::Int) {
+        reportError(decl.line,
+                    decl.column,
+                    "coro function '" + decl.name + "' must return int");
+    }
     symbol.type = std::move(returnType);
     symbol.line = decl.line;
     symbol.column = decl.column;
@@ -577,6 +603,7 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
     symbol.isExtern = decl.isExtern;
     symbol.isVariadic = decl.isVariadic;
     symbol.isPrototype = decl.isPrototype;
+    symbol.isCoro = decl.isCoro;
     for (const auto& param : decl.parameters) {
         // 参数类型的诊断：头文件原型无函数体，签名阶段即报告（void* 形参等
         // 不会被静默吞掉）；函数定义/extern 声明沿用既有策略（定义在
@@ -686,6 +713,17 @@ void SemanticAnalyzer::checkFunctionBody(const FuncDeclaration& decl) {
                         "parameter '" + param->name + "' has incomplete type 'struct "
                           + paramType.tag + "'");
         }
+        // coro 参数限制（PRD R12 一期朴素方案）：跨 yield 存活的参数提升到帧
+        // struct（每字段一个字宽槽），仅标量/指针可表达；struct/数组值报错
+        if (decl.isCoro
+            && (paramType.kind == SemanticType::Kind::Struct
+                || paramType.kind == SemanticType::Kind::Array)) {
+            reportError(param->line,
+                        param->column,
+                        "coro parameter '" + param->name + "' has non-scalar type '"
+                          + typeName(paramType)
+                          + "' (coro frame promotion supports int/char/pointer only)");
+        }
         Symbol symbol;
         symbol.kind = SymbolKind::Parameter;
         symbol.name = param->name;
@@ -702,8 +740,11 @@ void SemanticAnalyzer::checkFunctionBody(const FuncDeclaration& decl) {
         checkStmt(*stmt);
     }
 
-    // return 覆盖检查（保守可达性，策略见 definitelyReturns 注释）
-    if (fnReturnType.kind != SemanticType::Kind::Void && !definitelyReturns(*decl.body)) {
+    // return 覆盖检查（保守可达性，策略见 definitelyReturns 注释）。
+    // coro 函数（PRD R12）跳过：状态机变换保证 fall-off-end 走完成态返回
+    // （缺 return 等价于 return 0），不要求源码显式收尾
+    if (!decl.isCoro && fnReturnType.kind != SemanticType::Kind::Void
+        && !definitelyReturns(*decl.body)) {
         reportError(decl.line,
                     decl.column,
                     "missing return statement in non-void function '" + decl.name + "'");
@@ -743,6 +784,16 @@ void SemanticAnalyzer::checkLocalVariable(const StmtVarDeclaration& decl) {
                     decl.column,
                     "variable '" + decl.name + "' has incomplete type 'struct " + tag
                       + "'");
+    }
+    // coro 局部限制（PRD R12 一期朴素方案）：与参数同规则，仅标量/指针可提升
+    if (m_currentFunction != nullptr && m_currentFunction->isCoro
+        && (declared.kind == SemanticType::Kind::Struct
+            || declared.kind == SemanticType::Kind::Array)) {
+        reportError(decl.line,
+                    decl.column,
+                    "coro local variable '" + decl.name + "' has non-scalar type '"
+                      + typeName(declared)
+                      + "' (coro frame promotion supports int/char/pointer only)");
     }
     Symbol symbol;
     symbol.kind = SymbolKind::Variable;
@@ -791,6 +842,10 @@ void SemanticAnalyzer::checkStmt(const Stmt& stmt) {
     case ASTNodeType::DEFER_STMT:
         // defer 语句（PRD R10；追加在既有语句分发链之后）
         checkDefer(static_cast<const DeferStmt&>(stmt));
+        break;
+    case ASTNodeType::YIELD_STMT:
+        // yield 语句（PRD R12；追加在既有语句分发链之后）
+        checkYield(static_cast<const YieldStmt&>(stmt));
         break;
     default:
         break;
@@ -921,7 +976,7 @@ void SemanticAnalyzer::checkContinue(const ContinueStmt& stmt) {
     }
 }
 
-// ---- defer / match（PRD R10/R11；追加在既有检查函数之后） ----
+// ---- defer / match / coro（PRD R10/R11/R12；追加在既有检查函数之后） ----
 
 void SemanticAnalyzer::checkDefer(const DeferStmt& stmt) {
     // defer 内再 defer → 编译错误（任务规格；PRD R10 限制的闭合）
@@ -944,6 +999,8 @@ void SemanticAnalyzer::checkDefer(const DeferStmt& stmt) {
     m_deferDepth++;
     checkExpr(*exprStmt.expression);
     m_deferDepth--;
+    // R12：登记进当前作用域的 pending 计数（checkYield 据此裁决硬约束）
+    m_pendingDefers.back()++;
 }
 
 SemanticType SemanticAnalyzer::checkMatch(const MatchExpr& expr) {
@@ -1476,6 +1533,15 @@ void SemanticAnalyzer::checkInitializer(const Expr& initializer,
 }
 
 SemanticType SemanticAnalyzer::checkCall(const CallExpr& expr) {
+    // coro 内建（PRD R12）：coro_create/coro_resume/coro_done 由编译器内建
+    // 实现（保留名，见 registerFunctionSignature），不走普通符号查找
+    if (expr.callee == "coro_create" || expr.callee == "coro_resume"
+        || expr.callee == "coro_done") {
+        if (expr.callee == "coro_create") {
+            return checkCoroCreate(expr);
+        }
+        return checkCoroHandleOp(expr);
+    }
     const Symbol* symbol = lookupSymbol(expr.callee);
     if (symbol == nullptr) {
         const std::string hint = hiddenGlobalHint(expr.callee);
@@ -1491,6 +1557,19 @@ SemanticType SemanticAnalyzer::checkCall(const CallExpr& expr) {
     }
     if (symbol->kind != SymbolKind::Function) {
         reportError(expr.line, expr.column, "'" + expr.callee + "' is not a function");
+        for (const auto& argument : expr.arguments) {
+            checkExpr(*argument);
+        }
+        return SemanticType::Error;
+    }
+    // coro 函数不可直接调用（PRD R12）：无栈协程的执行从 coro_create 的句柄
+    // 经 coro_resume 驱动；直接调用会绕过状态机帧（A2 决策的必然推论）
+    if (symbol->isCoro) {
+        reportError(expr.line,
+                    expr.column,
+                    "coro function '" + expr.callee
+                      + "' cannot be called directly; use coro_create to obtain a "
+                        "handle and coro_resume to drive it");
         for (const auto& argument : expr.arguments) {
             checkExpr(*argument);
         }
@@ -1607,6 +1686,146 @@ void SemanticAnalyzer::checkConversion(
                 column,
                 "cannot convert '" + typeName(from) + "' to '" + typeName(to) + "' in "
                   + context);
+}
+
+// ---- coro（PRD R12）----
+
+void SemanticAnalyzer::checkYield(const YieldStmt& stmt) {
+    // yield 仅在函数体内合法（解析器保证语句位置在函数体内；防御顶层场景）
+    if (m_currentFunction == nullptr) {
+        reportError(stmt.line, stmt.column, "'yield' outside of a function body");
+        return;
+    }
+    // 仅 coro 函数体内合法（PRD R12）：普通函数没有可挂起的协程帧
+    if (!m_currentFunction->isCoro) {
+        reportError(stmt.line,
+                    stmt.column,
+                    "'yield' is only allowed inside a coro function ('"
+                      + m_currentFunction->name + "' is not a coro)");
+        if (stmt.value != nullptr) {
+            checkExpr(*stmt.value); // 仍检查值表达式，尽量多收集错误
+        }
+        return;
+    }
+    // PRD R12 硬约束（决策记录 A6/O3）：yield 挂起时不得存在 pending defer
+    // ——defer 的展开动作内联在 return/块尾等退出路径上，挂起/恢复会绕过
+    // 这些插入点（pending 的退出动作既不在挂起时执行、也不在恢复时执行），
+    // 组合语义不可良定义，编译期拒绝而非误译。判定 = 当前到全局的任一作用
+    // 域已有 defer 注册（注册点在 yield 之前；之后的注册不影响更早的 yield）
+    for (const int pending : m_pendingDefers) {
+        if (pending > 0) {
+            reportError(stmt.line,
+                        stmt.column,
+                        "'yield' cannot appear in a scope with a pending defer");
+            if (stmt.value != nullptr) {
+                checkExpr(*stmt.value);
+            }
+            return;
+        }
+    }
+    // 产出值（coro 返回类型一期限定 int，见 registerFunctionSignature）
+    if (stmt.value != nullptr) {
+        SemanticType valueType = checkExpr(*stmt.value);
+        checkConversion(valueType,
+                        SemanticType::Int,
+                        stmt.line,
+                        stmt.column,
+                        "yield statement");
+    }
+}
+
+SemanticType SemanticAnalyzer::checkCoroCreate(const CallExpr& expr) {
+    // coro_create 只能在函数体内使用（分配语句经 prelude 落在语句边界，全局
+    // 初始化器没有语句边界——与 match 的限制同理由）
+    if (m_currentFunction == nullptr) {
+        reportError(expr.line,
+                    expr.column,
+                    "coro_create is only allowed inside a function body");
+        return SemanticType::Error;
+    }
+    if (expr.arguments.empty()) {
+        reportError(expr.line,
+                    expr.column,
+                    "coro_create expects a coro function name as its first argument");
+        return SemanticType::Error;
+    }
+    // 第一实参必须是 coro 函数名（编译期解析，非函数指针——语言无函数类型，
+    // 朴素方案：以名字引用本编译单元内定义的 coro 函数）
+    const Expr& first = *expr.arguments.front();
+    if (first.type != ASTNodeType::IDENTIFIER_EXPR) {
+        reportError(expr.line,
+                    expr.column,
+                    "first argument of coro_create must be a coro function name");
+        for (const auto& argument : expr.arguments) {
+            checkExpr(*argument);
+        }
+        return SemanticType::Error;
+    }
+    const auto& name = static_cast<const IdentifierExpr&>(first).name;
+    const Symbol* symbol = lookupGlobal(name);
+    if (symbol == nullptr || symbol->kind != SymbolKind::Function || !symbol->isCoro) {
+        reportError(expr.line,
+                    expr.column,
+                    "'" + name
+                      + "' is not a coro function (coro_create requires a "
+                        "function declared with 'coro')");
+        for (const auto& argument : expr.arguments) {
+            checkExpr(*argument);
+        }
+        return SemanticType::Error;
+    }
+    // 一期限制：coro_create 只引用本文件定义的 coro 函数（帧布局/句柄编号
+    // 是编译单元内私有约定，跨文件 coro 留给独立编译+链接里程碑）
+    if (symbol->isExtern || symbol->isPrototype
+        || (!symbol->definedIn.empty() && symbol->definedIn != m_currentFile)) {
+        reportError(expr.line,
+                    expr.column,
+                    "coro_create requires a coro function defined in the same file "
+                    "('"
+                      + name + "' is not)");
+    }
+    // 其余实参按 coro 函数参数表检查（个数严格相等）
+    if (expr.arguments.size() - 1 != symbol->paramTypes.len()) {
+        reportError(expr.line,
+                    expr.column,
+                    "coro_create expects " + std::to_string(symbol->paramTypes.len())
+                      + " argument(s) for coro '" + name + "', but got "
+                      + std::to_string(expr.arguments.size() - 1));
+    }
+    const ca::usize checkCount =
+      std::min(expr.arguments.size() - 1, symbol->paramTypes.len());
+    for (ca::usize i = 0; i < checkCount; ++i) {
+        SemanticType argumentType = checkExpr(*expr.arguments[i + 1]);
+        checkConversion(argumentType,
+                        symbol->paramTypes[i],
+                        expr.line,
+                        expr.column,
+                        "argument " + std::to_string(static_cast<int>(i) + 1)
+                          + " of coro_create for '" + name + "'");
+    }
+    // 句柄（int）：帧槽编号编码（fnid*16 + slot）
+    return SemanticType::Int;
+}
+
+SemanticType SemanticAnalyzer::checkCoroHandleOp(const CallExpr& expr) {
+    // coro_resume/coro_done：单 int（或 char，提升）实参；可在任意函数内使用
+    if (expr.arguments.size() != 1) {
+        reportError(expr.line,
+                    expr.column,
+                    expr.callee + " expects exactly 1 handle argument, but got "
+                      + std::to_string(expr.arguments.size()));
+        for (const auto& argument : expr.arguments) {
+            checkExpr(*argument);
+        }
+        return SemanticType::Int;
+    }
+    SemanticType argumentType = checkExpr(*expr.arguments.front());
+    checkConversion(argumentType,
+                    SemanticType::Int,
+                    expr.line,
+                    expr.column,
+                    "handle argument of " + expr.callee);
+    return SemanticType::Int;
 }
 
 // ---- return 覆盖检查 ----

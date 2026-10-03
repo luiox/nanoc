@@ -26,6 +26,8 @@ enum class NTokenKind : int {
     KEYWORD_EXTERN,  // extern：外部 C 函数声明（PRD R3）
     KEYWORD_DEFER,   // defer：作用域退出时逆序执行（PRD R10；新增追加在表尾）
     KEYWORD_MATCH,   // match：模式匹配表达式（PRD R11；新增追加在表尾）
+    KEYWORD_CORO,    // coro：协程函数修饰符（PRD R12；新增追加在表尾）
+    KEYWORD_YIELD,   // yield：挂起并产出值（PRD R12；新增追加在表尾）
 
     // Identifiers
     IDENTIFIER,

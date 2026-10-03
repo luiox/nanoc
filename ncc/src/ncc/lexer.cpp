@@ -27,6 +27,9 @@ void Lexer::initKeywords() {
     // PRD R10/R11 语言特性关键字（追加在表尾，不改既有映射）
     m_keywords["defer"] = NTokenKind::KEYWORD_DEFER;
     m_keywords["match"] = NTokenKind::KEYWORD_MATCH;
+    // PRD R12 协程关键字（追加在表尾，不改既有映射）
+    m_keywords["coro"] = NTokenKind::KEYWORD_CORO;
+    m_keywords["yield"] = NTokenKind::KEYWORD_YIELD;
 }
 
 char Lexer::currentChar() const {
