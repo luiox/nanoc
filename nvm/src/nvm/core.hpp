@@ -9,18 +9,25 @@
 
 constexpr int32_t DEFAULT_STACK_SIZE = 8 * 1024 * 1024;
 
-// 动态链接宿主地址分配起点（宿主地址与代码段地址空间隔离）
+// 动态链接宿主地址分配起点（宿主地址与代码段地址空间隔离）。
+// nas 对无地址 extern 分配的伪宿主地址区为 0x7E000000 起（DYNAMIC_HOST_BASE），
+// 与本分配区隔离；两区均在代码/数据地址空间之外
 constexpr int32_t HOST_ADDRESS_BASE = 0x7F000000;
 
 // 调用约定（导入表 flags bit0-1）
 constexpr int32_t CONV_FASTCALL = 0;
 constexpr int32_t CONV_CDECL = 1;
 
+// 导入表 flags bit2：动态导入标记（加载期按符号名经宿主库解析，规范 §2.1）。
+// 与 nas 侧 IMPORT_FLAG_DYNAMIC（nas/instruction.hpp）同义异名，避免两模块
+// 头文件在 tests 同 TU 内重定义冲突
+constexpr int32_t DYNAMIC_IMPORT_FLAG = 0x4;
+
 // NCI v2.1 导入符号（宿主函数引用）
 struct NImportSymbol {
     std::string name; // 符号名（不含 NUL）
-    int32_t addr;     // 宿主地址；0 = 留给动态链接
-    int32_t flags;    // bit0-1 = 调用约定：0=fastcall，1=cdecl；其余 0
+    int32_t addr;     // 宿主地址：静态绑定 / 伪地址（动态导入）/ 0（旧格式动态）
+    int32_t flags;    // bit0-1 = 调用约定：0=fastcall，1=cdecl；bit2 = 动态导入
 };
 
 // NCI v2.1 导出符号（代码段地址）
@@ -105,11 +112,15 @@ public:
     // 按名注册宿主函数（供 resolveImportsByName 动态解析）
     void registerHostFunction(const std::string & name, NHostFunction fn);
 
-    // 加载宿主动态库，解析导入表中 addr == 0 的符号（Windows: LoadLibraryA +
-    // GetProcAddress；POSIX: dlopen + dlsym）。地址从 HOST_ADDRESS_BASE 起分配并回填
+    // 加载宿主动态库，解析导入表中的动态导入（flags bit2 置位的伪地址导入，或
+    // 旧格式 addr == 0 导入）：按符号名 GetProcAddress/dlsym，命中后经签名包装器
+    // 适配并登记在该导入的伪地址上（callx 站点 imm 天然命中；旧格式 addr=0 则从
+    // HOST_ADDRESS_BASE 起分配并回填）。未命中 / 无已知签名包装器 → 明确报错
+    // （Windows: LoadLibraryA + GetProcAddress；POSIX: dlopen + dlsym）
     bool loadHostLibrary(const std::string & path);
 
-    // 用按名注册表解析导入表中 addr == 0 的符号，地址从 HOST_ADDRESS_BASE 起分配并回填
+    // 用按名注册表解析导入表中的动态导入（判定同 loadHostLibrary），地址分配
+    // 规则亦同（伪地址原位登记；addr=0 从 HOST_ADDRESS_BASE 起分配并回填）
     bool resolveImportsByName();
 
     // 获取栈指针
@@ -174,6 +185,18 @@ private:
 
     // 为符号分配（或复用）宿主地址并登记到 CALLX 分发表
     int32_t internHostSymbol(const std::string & name, NHostFunction fn);
+
+    // 在指定宿主地址登记符号并返回登记地址：addr != 0（伪地址）原位登记，
+    // callx 站点 imm 天然命中；addr == 0（旧格式动态导入）走 internHostSymbol
+    // 从 HOST_ADDRESS_BASE 起分配
+    int32_t bindHostSymbol(const std::string & name, NHostFunction fn, int32_t addr);
+
+    // 导入符号是否为动态导入（待加载期解析）：旧格式 addr == 0 或 flags bit2
+    static bool
+    isDynamicImport(const NImportSymbol & sym)
+    {
+        return sym.addr == 0 || (sym.flags & DYNAMIC_IMPORT_FLAG) != 0;
+    }
 
     int32_t m_pc;
     int32_t m_ax;

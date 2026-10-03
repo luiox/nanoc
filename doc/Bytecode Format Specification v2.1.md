@@ -53,8 +53,8 @@ header(32B) | code(codeSize) | data(dataSize) | import table | export table
 | 4 | nameLen | name：UTF-8 符号名 |
 | 4+nameLen | 1 | NUL 终止符 |
 | 动态 | 动态 | pad：补零至 4 字节对齐（以 entry 起始为基准） |
-| 动态 | 4 | addr：宿主地址；**0 = 留给动态链接** |
-| 动态 | 4 | flags：bit0-1 = 调用约定（0=fastcall，1=cdecl），其余位必须为 0 |
+| 动态 | 4 | addr：宿主地址。静态绑定 = 显式指定地址；动态导入 = 汇编器分配的伪宿主地址（见"动态链接约定"）；**0 = 旧格式动态导入（留给加载期分配）** |
+| 动态 | 4 | flags：bit0-1 = 调用约定（0=fastcall，1=cdecl），bit2 = 动态导入标记（1 = 加载期按符号名经宿主库解析），其余位必须为 0 |
 
 **导出表 entry**（重复 exportCount 次）：与导入表同构——addr = 符号在代码段内的地址，flags 恒 0。
 
@@ -62,7 +62,11 @@ header(32B) | code(codeSize) | data(dataSize) | import table | export table
 
 **调用约定**：汇编侧 `.calling_convention fastcall|cdecl` 顺序作用于其后声明的 `extern`（文件级顺序生效），写入对应导入 entry 的 flags。fastcall 前 4 个整型参数走 R0-R3；cdecl 参数压栈、由调用者清栈（`addi R4, N`）。约定仅是符号元数据，指令编码不受影响。
 
-**动态链接约定**：导入 entry `addr = 0` 表示符号地址由加载期解析（按符号名注册或经 `GetProcAddress`/`dlsym` 解析）。参考实现从 `0x7F000000`（`HOST_ADDRESS_BASE`）起为动态符号分配宿主地址并回填，宿主地址空间与代码/数据地址空间隔离。
+**动态链接约定**：导入 entry `flags bit2 = 1` 表示动态导入。nas 对无地址的 `extern name` 分配**确定性伪宿主地址**——从 `0x7E000000`（`DYNAMIC_HOST_BASE`）起、按声明序 +4——同时写入导入表 addr 字段与 `callx` 站点 imm（同值），站点↔符号一对一，消除旧格式 addr=0 的按值歧义；伪地址区与代码/数据地址空间及 VM 宿主地址分配区（`0x7F000000` 起，`HOST_ADDRESS_BASE`）隔离。显式地址 `extern name addr` 为静态宿主绑定（不置 bit2）。
+
+加载期宿主库（`--host-lib <path>`，可多次）对动态导入按符号名 `GetProcAddress`/`dlsym` 解析：命中后将真 C 函数经**签名包装器**适配，登记在该导入的伪宿主地址上（`callx` 站点 imm 天然命中，无需改写）；未命中则明确报错（符号名 + 库名）。真 C 函数指针与 VM 宿主函数签名（`int32_t(*)(int32_t* regs, int8_t* mem, int32_t memSize)`）ABI 不同，不能直接 cast 调用——参考实现维护已知签名白名单（一期：`puts`/`putchar`/`abs`/`atoi`/`strlen`/`exit`/`GetTickCount`），库中存在但不在白名单的符号同样明确报错。字符串参数为 VM 统一内存地址，包装器内做边界保护（越界或非 NUL 终止视为无效参数）。
+
+旧格式兼容：`addr = 0` 且 bit2 = 0 的导入仍按"加载期按名解析、从 `HOST_ADDRESS_BASE` 起分配宿主地址并回填导入表"处理（此形态下 `callx` 站点 imm 不自动命中，需手工内联分配后地址或依赖宿主侧按值约定）。
 
 ### 2.2 链接语义（nas -r）
 
@@ -70,7 +74,7 @@ header(32B) | code(codeSize) | data(dataSize) | import table | export table
 
 - **段合并**：code/data 顺序拼接。统一编址下模块 i 的代码基址 = Σ前面 codeSize，数据基址 = Σ前面 (codeSize+dataSize)。
 - **重定位**：按 §3.1 指令长度表线性解码 code 段，地址类指令 imm 做范围判断——`< 模块 codeSize` → 代码地址（+代码基址）；`∈ [codeSize, codeSize+dataSize)` → 数据地址（+数据基址）；`≥ codeSize+dataSize` → 宿主地址（不动）。CALLX 不做范围平移（见下）。数据段不做扫描重定位（无逐字重定位信息，`dd` 地址常量链接后失效；跨模块数据引用走"导出数据标号 + 导入解析"路径）。
-- **符号解析**：导入 `addr = 0`（动态）且名字命中任一模块导出 → 内部解析：该模块内 imm 与导入 addr 相等的 CALLX/LEA/LOADA/STOREA/ST 站点改写为平移后目标地址，导入从输出表移除；显式静态宿主绑定（addr≠0）不改写。同一模块多个 addr=0 导入中存在可内部解析者时站点无法按值消歧 → 报错。未解析导入按名去重合并（调用约定冲突报错），addr 原样保留；导出地址平移后合并（重名报错）。
+- **符号解析**：导入 `addr = 0`（旧格式动态）或 `flags bit2 = 1`（伪地址动态导入）且名字命中任一模块导出 → 内部解析（**内部导出优先于加载期宿主解析**）：该模块内 imm 与导入 addr 相等的 CALLX/LEA/LOADA/STOREA/ST 站点改写为平移后目标地址，导入从输出表移除。未内部解析的动态导入，其站点 imm 统一改写为该符号在输出导入表中的首现伪地址（跨模块声明序差异归一）。显式静态宿主绑定（bit2 = 0 且 addr≠0）不改写。同一模块多个导入共享同一 addr 值且存在可内部解析者时站点无法按值消歧 → 报错（伪地址按声明序唯一，正常输入不触发）。未解析导入按名去重合并（flags 冲突报错），addr 取首现值；导出地址平移后合并（重名报错）。
 - **entryPoint**：任一模块导出 `main` → 用之；否则第一个导出符号；否则 0。
 
 **CALLX 双语义**：链接后 `0 < addr < codeSize` 的 CALLX 按内部 CALL 处理（压返回地址、跳转）；否则查宿主函数表（地址 0 保留给未解析动态导入的宿主路径，宿主地址不得落入 `[0, codeSize)`）。
@@ -276,6 +280,8 @@ factorial:
 - [x] NAS：`.calling_convention`, `extern`, `export`，数据段与完整 v2.1 目标文件（PR #34）
 - [x] 集成验收：汇编 → 加载 → 宿主调用 e2e（PR #35）
 - [x] VM 链接器：`nas -r` 段合并/重定位/符号解析 + CALLX 双语义（PR R7）
+- [x] 宿主库直调通路：nas 动态导入伪宿主地址 + flags bit2、`nvm --host-lib` 按名解析 +
+      签名包装器白名单（R3 VM 侧前置）
 - [ ] 测试：C 标准库互操作（printf, malloc, exit 经宿主函数）
 
 ---

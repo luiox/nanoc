@@ -35,10 +35,24 @@ NVirtualMachine::executeCALLX()
     }
     auto it = m_hostFunctions.find(addr);
     if (it == m_hostFunctions.end()) {
-        printf(
-          "Error: CALLX: unresolved host function at 0x%08X (pc=%d), execution stopped\n",
-          (uint32_t)addr,
-          (int32_t)m_pc);
+        // 动态导入未解析（伪地址 / 旧格式 addr=0）时回查导入表给出符号名
+        const NImportSymbol * sym = nullptr;
+        for (const auto & im : m_imports)
+            if (im.addr == addr) {
+                sym = &im;
+                break;
+            }
+        if (sym)
+            printf("Error: CALLX: unresolved host function 0x%08X for import '%s' "
+                   "(pc=%d), execution stopped\n",
+                   (uint32_t)addr,
+                   sym->name.c_str(),
+                   (int32_t)m_pc);
+        else
+            printf("Error: CALLX: unresolved host function at 0x%08X (pc=%d), execution "
+                   "stopped\n",
+                   (uint32_t)addr,
+                   (int32_t)m_pc);
         m_pc = (int32_t)m_codeSize;
         return;
     }

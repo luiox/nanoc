@@ -153,7 +153,7 @@ NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
     m_pc = entryPoint;
 }
 
-// ==== 宿主函数注册与动态链接 ====
+// ==== 宿主库函数注册与动态链接 ====
 
 void
 NVirtualMachine::registerHostFunction(int32_t addr, NHostFunction fn)
@@ -188,12 +188,195 @@ NVirtualMachine::internHostSymbol(const std::string & name, NHostFunction fn)
     return addr;
 }
 
+int32_t
+NVirtualMachine::bindHostSymbol(const std::string & name, NHostFunction fn, int32_t addr)
+{
+    if (addr == 0)
+        return internHostSymbol(name, fn);
+    auto it = m_hostAddrByName.find(name);
+    if (it != m_hostAddrByName.end())
+        return it->second; // 同一符号复用已登记地址
+    m_hostFunctions[addr] = fn;
+    m_hostAddrByName[name] = addr;
+    return addr;
+}
+
+// ==== 宿主库函数签名包装器（loadHostLibrary 专用）====
+//
+// GetProcAddress/dlsym 拿到的是真 C 函数指针，而 VM 宿主函数签名为
+// int32_t(*)(int32_t* regs, int8_t* mem, int32_t memSize)，两者 ABI 不同，
+// 不能直接 cast 调用。按"已知签名白名单"适配：每个白名单函数一个包装器，
+// 从寄存器/统一内存取参、做边界保护后经正确原型调用真函数。整型参数走 R0 起
+// （fastcall 传参）；约定位仅是调用方元数据，不影响包装器取参。
+// 白名单按需扩展；库中存在但不在白名单的符号 → 明确报错（避免错误 ABI 调用）。
+namespace
+{
+    // VM 统一内存安全取 C 字符串：addr 合法且 [addr, memSize) 内存在 NUL 终止
+    // 时返回长度并置 out；越界或未终止返回 -1（防止真 C 函数越界读）
+    int32_t
+    vmCString(const int8_t * mem, int32_t memSize, int32_t addr, const char *& out)
+    {
+        if (addr < 0 || addr >= memSize)
+            return -1;
+        int64_t limit = (int64_t)memSize - addr;
+        for (int64_t n = 0; n < limit; ++n) {
+            if (mem[addr + n] == '\0') {
+                out = reinterpret_cast<const char *>(mem + addr);
+                return static_cast<int32_t>(n);
+            }
+        }
+        return -1;
+    }
+
+    // 每个白名单函数的真函数指针槽（loadHostLibrary 解析命中后填充）
+    void * g_real_puts = nullptr;
+    void * g_real_putchar = nullptr;
+    void * g_real_abs = nullptr;
+    void * g_real_atoi = nullptr;
+    void * g_real_strlen = nullptr;
+    void * g_real_exit = nullptr;
+#ifdef _WIN32
+    void * g_real_GetTickCount = nullptr;
+#endif
+
+    // int puts(const char*)：输出统一内存中的 C 字符串（含换行由调用方自带）
+    int32_t
+    wrap_puts(int32_t * regs, int8_t * mem, int32_t memSize)
+    {
+        typedef int (*RealFn)(const char *);
+        const char * s = nullptr;
+        if (!g_real_puts || vmCString(mem, memSize, regs[0], s) < 0) {
+            fprintf(stderr,
+                    "Error: host-lib puts: R0=%d 不是统一内存中的有效 C 字符串\n",
+                    regs[0]);
+            return -1;
+        }
+        return reinterpret_cast<RealFn>(g_real_puts)(s);
+    }
+
+    // int putchar(int)
+    int32_t
+    wrap_putchar(int32_t * regs, int8_t * mem, int32_t memSize)
+    {
+        typedef int (*RealFn)(int);
+        (void)mem;
+        (void)memSize;
+        if (!g_real_putchar)
+            return -1;
+        return reinterpret_cast<RealFn>(g_real_putchar)(regs[0]);
+    }
+
+    // int abs(int)
+    int32_t
+    wrap_abs(int32_t * regs, int8_t * mem, int32_t memSize)
+    {
+        typedef int (*RealFn)(int);
+        (void)mem;
+        (void)memSize;
+        if (!g_real_abs) {
+            fprintf(stderr, "Error: host-lib abs: 真函数指针未解析\n");
+            return 0;
+        }
+        return reinterpret_cast<RealFn>(g_real_abs)(regs[0]);
+    }
+
+    // int atoi(const char*)
+    int32_t
+    wrap_atoi(int32_t * regs, int8_t * mem, int32_t memSize)
+    {
+        typedef int (*RealFn)(const char *);
+        const char * s = nullptr;
+        if (!g_real_atoi || vmCString(mem, memSize, regs[0], s) < 0) {
+            fprintf(stderr,
+                    "Error: host-lib atoi: R0=%d 不是统一内存中的有效 C 字符串\n",
+                    regs[0]);
+            return 0;
+        }
+        return reinterpret_cast<RealFn>(g_real_atoi)(s);
+    }
+
+    // size_t strlen(const char*)：返回值截断为 int32（VM 整型即 32 位）
+    int32_t
+    wrap_strlen(int32_t * regs, int8_t * mem, int32_t memSize)
+    {
+        typedef size_t (*RealFn)(const char *);
+        const char * s = nullptr;
+        if (!g_real_strlen || vmCString(mem, memSize, regs[0], s) < 0) {
+            fprintf(stderr,
+                    "Error: host-lib strlen: R0=%d 不是统一内存中的有效 C 字符串\n",
+                    regs[0]);
+            return 0;
+        }
+        return static_cast<int32_t>(reinterpret_cast<RealFn>(g_real_strlen)(s));
+    }
+
+    // void exit(int)：以调用方给出的码终止 nvm 进程（规范 §5.1 示例语义）
+    int32_t
+    wrap_exit(int32_t * regs, int8_t * mem, int32_t memSize)
+    {
+        typedef void (*RealFn)(int);
+        (void)mem;
+        (void)memSize;
+        if (g_real_exit)
+            reinterpret_cast<RealFn>(g_real_exit)(regs[0]);
+        return 0;
+    }
+
+#ifdef _WIN32
+    // DWORD GetTickCount(void)：无参，返回值按 int32 回写 R0
+    int32_t
+    wrap_GetTickCount(int32_t * regs, int8_t * mem, int32_t memSize)
+    {
+        typedef unsigned long (*RealFn)(void);
+        (void)regs;
+        (void)mem;
+        (void)memSize;
+        if (!g_real_GetTickCount)
+            return 0;
+        return static_cast<int32_t>(reinterpret_cast<RealFn>(g_real_GetTickCount)());
+    }
+#endif
+
+    struct HostLibBinding {
+        const char * name;
+        NHostFunction wrapper;
+        void ** slot; // 真函数指针槽
+    };
+
+    // 一期白名单：msvcrt/libc 常用整型签名函数；GetTickCount 供旧格式动态链接
+    // 路径（addr=0 + kernel32.dll）回归使用
+    HostLibBinding HOST_LIB_BINDINGS[] = {
+        { "puts", wrap_puts, &g_real_puts },
+        { "putchar", wrap_putchar, &g_real_putchar },
+        { "abs", wrap_abs, &g_real_abs },
+        { "atoi", wrap_atoi, &g_real_atoi },
+        { "strlen", wrap_strlen, &g_real_strlen },
+        { "exit", wrap_exit, &g_real_exit },
+#ifdef _WIN32
+        { "GetTickCount", wrap_GetTickCount, &g_real_GetTickCount },
+#endif
+    };
+
+    const HostLibBinding *
+    findHostLibBinding(const std::string & name)
+    {
+        for (const auto & b : HOST_LIB_BINDINGS)
+            if (name == b.name)
+                return &b;
+        return nullptr;
+    }
+} // namespace
+
 bool
 NVirtualMachine::resolveImportsByName()
 {
     bool ok = true;
     for (auto & sym : m_imports) {
-        if (sym.addr != 0)
+        if (!isDynamicImport(sym))
+            continue;
+        if (m_hostAddrByName.count(sym.name))
+            continue; // 已被此前的解析路径登记
+        if (sym.addr != 0 && m_hostFunctions.count(sym.addr))
             continue;
         auto it = m_hostFunctionsByName.find(sym.name);
         if (it == m_hostFunctionsByName.end()) {
@@ -202,7 +385,7 @@ NVirtualMachine::resolveImportsByName()
             ok = false;
             continue;
         }
-        sym.addr = internHostSymbol(sym.name, it->second);
+        sym.addr = bindHostSymbol(sym.name, it->second, sym.addr);
     }
     return ok;
 }
@@ -229,7 +412,11 @@ NVirtualMachine::loadHostLibrary(const std::string & path)
 #endif
     bool ok = true;
     for (auto & sym : m_imports) {
-        if (sym.addr != 0)
+        if (!isDynamicImport(sym))
+            continue; // 静态绑定不解析
+        if (m_hostAddrByName.count(sym.name))
+            continue; // 已被此前的解析路径登记
+        if (sym.addr != 0 && m_hostFunctions.count(sym.addr))
             continue;
 #ifdef _WIN32
         FARPROC proc = GetProcAddress(lib, sym.name.c_str());
@@ -243,7 +430,20 @@ NVirtualMachine::loadHostLibrary(const std::string & path)
             ok = false;
             continue;
         }
-        sym.addr = internHostSymbol(sym.name, reinterpret_cast<NHostFunction>(proc));
+        // 真 C 函数指针不能直接当 VM 宿主函数调用（ABI 不同）：查白名单取包装器
+        const HostLibBinding * binding = findHostLibBinding(sym.name);
+        if (!binding) {
+            printf("Error: loadHostLibrary: symbol '%s' found in '%s' but has no "
+                   "known signature wrapper (host-lib whitelist)\n",
+                   sym.name.c_str(),
+                   path.c_str());
+            ok = false;
+            continue;
+        }
+        void * addr = nullptr;
+        memcpy(&addr, &proc, sizeof(addr)); // 函数指针 → 对象指针（避免直接 cast）
+        *binding->slot = addr;
+        sym.addr = bindHostSymbol(sym.name, binding->wrapper, sym.addr);
     }
     return ok;
 }

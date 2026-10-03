@@ -280,6 +280,44 @@ TEST(LinkerTest, StaticHostBindingNotRewritten) {
     EXPECT_EQ(r.image[32 + 6], 0x62);           // 模块 2 ret（codeBase = 6）
 }
 
+// 手工构造最小 v2.1 目标（用于 nas 不再产出的旧格式 addr=0 导入路径回归）
+static std::vector<uint8_t>
+handObj(const std::vector<uint8_t>& code,
+        const std::vector<std::tuple<std::string, int32_t, int32_t>>& imports,
+        const std::vector<std::tuple<std::string, int32_t>>& exports) {
+    std::vector<uint8_t> v;
+    const char magic[8] = { 'N', 'a', 'n', 'o', 'C', 0, 0, 0 };
+    v.insert(v.end(), magic, magic + 8);
+    putI32(v, 32);                                // headerSize
+    putI32(v, static_cast<int32_t>(code.size())); // codeSize
+    putI32(v, 0);                                 // dataSize
+    putI32(v, static_cast<int32_t>(imports.size()));
+    putI32(v, static_cast<int32_t>(exports.size()));
+    putI32(v, 0); // entryPoint
+    v.insert(v.end(), code.begin(), code.end());
+    for (const auto& [name, addr, flags] : imports) {
+        const size_t entryStart = v.size();
+        putI32(v, static_cast<int32_t>(name.size()));
+        v.insert(v.end(), name.begin(), name.end());
+        v.push_back(0);
+        while ((v.size() - entryStart) % 4 != 0)
+            v.push_back(0);
+        putI32(v, addr);
+        putI32(v, flags);
+    }
+    for (const auto& [name, addr] : exports) {
+        const size_t entryStart = v.size();
+        putI32(v, static_cast<int32_t>(name.size()));
+        v.insert(v.end(), name.begin(), name.end());
+        v.push_back(0);
+        while ((v.size() - entryStart) % 4 != 0)
+            v.push_back(0);
+        putI32(v, addr);
+        putI32(v, 0);
+    }
+    return v;
+}
+
 // ==== 错误路径 ====
 
 TEST(LinkerTest, EmptyInputError) {
@@ -335,8 +373,9 @@ TEST(LinkerTest, DuplicateExportError) {
     EXPECT_NE(r.errorMessage.find("f"), std::string::npos);
 }
 
-// 同一模块多个 addr=0 导入且其一可内部解析：站点无法按值消歧 → 报错（不静默错链）
-TEST(LinkerTest, AmbiguousDynamicImportsError) {
+// 动态导入（伪地址 + flags bit2）跨模块内部解析：站点按值一对一命中改写为
+// 平移后地址，命中导入移除；未命中的动态导入保留伪地址与 bit2 待加载期解析
+TEST(LinkerTest, DynamicExternCrossModuleResolved) {
     auto a = asmObj("extern f\n"
                     "extern g\n"
                     "export main\n"
@@ -347,8 +386,69 @@ TEST(LinkerTest, AmbiguousDynamicImportsError) {
                     "f:\n"
                     "    ret\n");
     LinkResult r = Linker::linkImages({ a, b });
+    ASSERT_TRUE(r.ok) << r.errorMessage;
+
+    EXPECT_EQ(getI32(r.image, 20), 1);     // f 已解析移除，g 保留
+    EXPECT_EQ(r.image[32], 0x61);          // callx f
+    EXPECT_EQ(getI32(r.image, 32 + 1), 6); // 改写为 f 平移后内部地址（codeBase_B = 6）
+    EXPECT_EQ(r.image[32 + 6], 0x62);      // 模块 b 的 ret（codeBase = 6）
+    // 保留的 g 导入 entry：伪宿主地址 0x7E000004（声明序第二）+ flags bit2
+    const size_t importOff = 32 + getI32(r.image, 12) + getI32(r.image, 16);
+    EXPECT_EQ(getI32(r.image, importOff), 1); // nameLen
+    EXPECT_EQ(r.image[importOff + 4], 'g');
+    EXPECT_EQ(getI32(r.image, importOff + 8), 0x7E000004);
+    EXPECT_EQ(getI32(r.image, importOff + 12), 0x4);
+}
+
+// 同一模块多个动态导入跨模块同名字解析：未解析动态导入站点 imm 归一为输出表
+// 首现伪地址（模块间声明序不同导致伪地址差异时由链接器统一）
+TEST(LinkerTest, DynamicExternPseudoAddressHarmonized) {
+    auto a = asmObj("extern h\n"
+                    "extern f\n"
+                    "export main\n"
+                    "main:\n"
+                    "    callx h\n"
+                    "    ret\n");
+    auto b = asmObj("extern f\n"
+                    "extern h\n"
+                    "export bfn\n"
+                    "bfn:\n"
+                    "    callx h\n"
+                    "    ret\n");
+    LinkResult r = Linker::linkImages({ a, b });
+    ASSERT_TRUE(r.ok) << r.errorMessage;
+
+    // f 未命中导出保留为动态导入；h 同名去重，addr 取首现（模块 a 的 0x7E000000）
+    EXPECT_EQ(getI32(r.image, 20), 2);
+    const size_t importOff = 32 + getI32(r.image, 12) + getI32(r.image, 16);
+    // 导入表按首现序：h（0x7E000000, bit2）、f（0x7E000004, bit2）
+    EXPECT_EQ(r.image[importOff + 4], 'h');
+    EXPECT_EQ(getI32(r.image, importOff + 8), 0x7E000000);
+    EXPECT_EQ(getI32(r.image, importOff + 12), 0x4);
+    // h 名部 4+1+1+pad2=8 + addr/flags 8 = 16 字节 → f entry @importOff+16
+    EXPECT_EQ(getI32(r.image, importOff + 16), 1); // f nameLen
+    EXPECT_EQ(r.image[importOff + 20], 'f');
+    EXPECT_EQ(getI32(r.image, importOff + 24), 0x7E000004);
+    EXPECT_EQ(getI32(r.image, importOff + 28), 0x4);
+    // 模块 a 站点 callx h：imm 已是首现伪地址（恒等）；模块 b 站点 callx h：
+    // b 内 h 伪地址为 0x7E000004，归一改写为首现 0x7E000000
+    EXPECT_EQ(getI32(r.image, 32 + 1), 0x7E000000);     // 模块 a（codeBase 0）
+    EXPECT_EQ(getI32(r.image, 32 + 6 + 1), 0x7E000000); // 模块 b（codeBase 6）
+}
+
+// 旧格式 addr=0 导入（手工构造，nas 已不产出）共享地址值且其一可内部解析：
+// 站点无法按值消歧 → 报错（不静默错链）
+TEST(LinkerTest, AmbiguousZeroAddrImportsError) {
+    // 模块 a：callx 0（imm=0），导入 f/g 均 addr=0 flags=0
+    std::vector<uint8_t> aCode = { 0x61, 0, 0, 0, 0, 0x62 };
+    auto a = handObj(aCode, { { "f", 0, 0 }, { "g", 0, 0 } }, { { "main", 0 } });
+    // 模块 b：导出 f
+    std::vector<uint8_t> bCode = { 0x62 };
+    auto b = handObj(bCode, {}, { { "f", 0 } });
+    LinkResult r = Linker::linkImages({ a, b });
     EXPECT_FALSE(r.ok);
     EXPECT_NE(r.errorMessage.find("f"), std::string::npos);
+    EXPECT_NE(r.errorMessage.find("消歧"), std::string::npos);
 }
 
 // 重名导入调用约定冲突 → 报错
