@@ -57,252 +57,7 @@ TEST(VMTest, PrintInfo) {
     EXPECT_TRUE(output.find("PC=") != std::string::npos);
 }
 
-// 测试虚拟机指令执行
-// TODO(#5): 旧 v1 指令集用例（TRAP 停机 + trace 断言），按 NCI v2.1 重写后解除禁用
-TEST(VMTest, DISABLED_InstructionExecution) {
-    // 创建一个测试程序：lmm R0, 10; add R0, 5; trap 0
-    std::string testFile = "test_execution.nca";
-    std::ofstream ofs(testFile, std::ios::binary);
-
-    // lmm R0, 10 (opcode=0, reg=0, value=10)
-    ofs.put(0x00); // LMM opcode
-    ofs.put(0x00); // R0
-    int32_t value1 = 10;
-    ofs.write(reinterpret_cast<const char*>(&value1), sizeof(value1));
-
-    // add R0, 5 (opcode=3, reg=0, value=5)
-    ofs.put(0x03); // ADD opcode
-    ofs.put(0x00); // R0
-    int32_t value2 = 5;
-    ofs.write(reinterpret_cast<const char*>(&value2), sizeof(value2));
-
-    // trap 0 (opcode=26, type=2 for HALT)
-    ofs.put(0x1A); // TRAP opcode
-    ofs.put(0x02); // HALT type
-
-    ofs.close();
-
-    NVirtualMachine vm(1024);
-    vm.load(testFile);
-
-    // 捕获输出
-    testing::internal::CaptureStdout();
-    vm.start();
-    std::string output = testing::internal::GetCapturedStdout();
-
-    // 验证输出包含预期的执行信息
-    EXPECT_TRUE(output.find("LMM: R0 = 10") != std::string::npos);
-    EXPECT_TRUE(output.find("ADD: R0 += 5 (result: 15)") != std::string::npos);
-    EXPECT_TRUE(output.find("TRAP: type=2") != std::string::npos);
-    EXPECT_TRUE(output.find("Program halted") != std::string::npos);
-
-    // 清理测试文件
-    std::remove(testFile.c_str());
-}
-
-// 测试乘法指令
-// TODO(#5): 旧 v1 指令集用例（TRAP 停机 + trace 断言），按 NCI v2.1 重写后解除禁用
-TEST(VMTest, DISABLED_MULInstruction) {
-    std::string testFile = "test_mul.nca";
-    std::ofstream ofs(testFile, std::ios::binary);
-
-    // lmm R0, 6 (opcode=0, reg=0, value=6)
-    ofs.put(0x00); // LMM opcode
-    ofs.put(0x00); // R0
-    int32_t value1 = 6;
-    ofs.write(reinterpret_cast<const char*>(&value1), sizeof(value1));
-
-    // mul R0, 7 (opcode=5, reg=0, value=7)
-    ofs.put(0x05); // MUL opcode
-    ofs.put(0x00); // R0
-    int32_t value2 = 7;
-    ofs.write(reinterpret_cast<const char*>(&value2), sizeof(value2));
-
-    // trap 0 (opcode=26, type=2 for HALT)
-    ofs.put(0x1A); // TRAP opcode
-    ofs.put(0x02); // HALT type
-
-    ofs.close();
-
-    NVirtualMachine vm(1024);
-    vm.load(testFile);
-
-    testing::internal::CaptureStdout();
-    vm.start();
-    std::string output = testing::internal::GetCapturedStdout();
-
-    EXPECT_TRUE(output.find("LMM: R0 = 6") != std::string::npos);
-    EXPECT_TRUE(output.find("MUL: R0 *= 7 (result: 42)") != std::string::npos);
-
-    std::remove(testFile.c_str());
-}
-
-// 测试除法指令
-// TODO(#5): 旧 v1 指令集用例（TRAP 停机 + trace 断言），按 NCI v2.1 重写后解除禁用
-TEST(VMTest, DISABLED_DIVInstruction) {
-    std::string testFile = "test_div.nca";
-    std::ofstream ofs(testFile, std::ios::binary);
-
-    // lmm R0, 20 (opcode=0, reg=0, value=20)
-    ofs.put(0x00); // LMM opcode
-    ofs.put(0x00); // R0
-    int32_t value1 = 20;
-    ofs.write(reinterpret_cast<const char*>(&value1), sizeof(value1));
-
-    // div R0, 4 (opcode=6, reg=0, value=4)
-    ofs.put(0x06); // DIV opcode
-    ofs.put(0x00); // R0
-    int32_t value2 = 4;
-    ofs.write(reinterpret_cast<const char*>(&value2), sizeof(value2));
-
-    // trap 0 (opcode=26, type=2 for HALT)
-    ofs.put(0x1A); // TRAP opcode
-    ofs.put(0x02); // HALT type
-
-    ofs.close();
-
-    NVirtualMachine vm(1024);
-    vm.load(testFile);
-
-    testing::internal::CaptureStdout();
-    vm.start();
-    std::string output = testing::internal::GetCapturedStdout();
-
-    EXPECT_TRUE(output.find("LMM: R0 = 20") != std::string::npos);
-    EXPECT_TRUE(output.find("DIV: R0 /= 4 (result: 5)") != std::string::npos);
-
-    std::remove(testFile.c_str());
-}
-
-// 测试比较指令
-// TODO(#5): 旧 v1 指令集用例（TRAP 停机 + trace 断言），按 NCI v2.1 重写后解除禁用
-TEST(VMTest, DISABLED_ComparisonInstructions) {
-    std::string testFile = "test_comparison.nca";
-    std::ofstream ofs(testFile, std::ios::binary);
-
-    // lmm R0, 10 (opcode=0, reg=0, value=10)
-    ofs.put(0x00); // LMM opcode
-    ofs.put(0x00); // R0
-    int32_t value1 = 10;
-    ofs.write(reinterpret_cast<const char*>(&value1), sizeof(value1));
-
-    // eq R0, 10 (opcode=14, reg=0, value=10)
-    ofs.put(0x0E); // EQ opcode
-    ofs.put(0x00); // R0
-    int32_t value2 = 10;
-    ofs.write(reinterpret_cast<const char*>(&value2), sizeof(value2));
-
-    // trap 0 (opcode=26, type=2 for HALT)
-    ofs.put(0x1A); // TRAP opcode
-    ofs.put(0x02); // HALT type
-
-    ofs.close();
-
-    NVirtualMachine vm(1024);
-    vm.load(testFile);
-
-    testing::internal::CaptureStdout();
-    vm.start();
-    std::string output = testing::internal::GetCapturedStdout();
-
-    EXPECT_TRUE(output.find("EQ: R0 == 10 (result: 1)") != std::string::npos);
-
-    std::remove(testFile.c_str());
-}
-
-// 测试栈操作指令
-// TODO(#5): 旧 v1 指令集用例（TRAP 停机 + trace 断言），按 NCI v2.1 重写后解除禁用
-TEST(VMTest, DISABLED_StackInstructions) {
-    std::string testFile = "test_stack.nca";
-    std::ofstream ofs(testFile, std::ios::binary);
-
-    // lmm R0, 42 (opcode=0, reg=0, value=42)
-    ofs.put(0x00); // LMM opcode
-    ofs.put(0x00); // R0
-    int32_t value1 = 42;
-    ofs.write(reinterpret_cast<const char*>(&value1), sizeof(value1));
-
-    // push R0 (opcode=20, reg=0)
-    ofs.put(0x14); // PUSH opcode
-    ofs.put(0x00); // R0
-
-    // lmm R0, 0 (opcode=0, reg=0, value=0)
-    ofs.put(0x00); // LMM opcode
-    ofs.put(0x00); // R0
-    int32_t value2 = 0;
-    ofs.write(reinterpret_cast<const char*>(&value2), sizeof(value2));
-
-    // pop R0 (opcode=21, reg=0)
-    ofs.put(0x15); // POP opcode
-    ofs.put(0x00); // R0
-
-    // trap 0 (opcode=26, type=2 for HALT)
-    ofs.put(0x1A); // TRAP opcode
-    ofs.put(0x02); // HALT type
-
-    ofs.close();
-
-    NVirtualMachine vm(1024);
-    vm.load(testFile);
-
-    testing::internal::CaptureStdout();
-    vm.start();
-    std::string output = testing::internal::GetCapturedStdout();
-
-    EXPECT_TRUE(output.find("PUSH: R0 (value: 42)") != std::string::npos);
-    EXPECT_TRUE(output.find("POP: R0 (value: 42)") != std::string::npos);
-
-    std::remove(testFile.c_str());
-}
-
-// 测试跳转指令
-// TODO(#5): 旧 v1 指令集用例（TRAP 停机 + trace 断言），按 NCI v2.1 重写后解除禁用
-TEST(VMTest, DISABLED_JumpInstructions) {
-    std::string testFile = "test_jump.nca";
-    std::ofstream ofs(testFile, std::ios::binary);
-
-    // jmp 11 (opcode=22, target=11) - 跳过第一条LMM指令
-    // 位置0-4: jmp指令(5字节)
-    // 位置5-10: LMM R0, 999 (6字节)
-    // 位置11-16: LMM R0, 100 (6字节)
-    // 位置17-18: trap (2字节)
-    ofs.put(0x16);       // JMP opcode
-    int32_t target = 11; // 跳到第二条LMM指令
-    ofs.write(reinterpret_cast<const char*>(&target), sizeof(target));
-
-    // 这里应该被跳过 (位置5-10)
-    ofs.put(0x00); // LMM opcode
-    ofs.put(0x00); // R0
-    int32_t value1 = 999;
-    ofs.write(reinterpret_cast<const char*>(&value1), sizeof(value1));
-
-    // lmm R0, 100 (opcode=0, reg=0, value=100) (位置11-16)
-    ofs.put(0x00); // LMM opcode
-    ofs.put(0x00); // R0
-    int32_t value2 = 100;
-    ofs.write(reinterpret_cast<const char*>(&value2), sizeof(value2));
-
-    // trap 0 (opcode=26, type=2 for HALT) (位置17-18)
-    ofs.put(0x1A); // TRAP opcode
-    ofs.put(0x02); // HALT type
-
-    ofs.close();
-
-    NVirtualMachine vm(1024);
-    vm.load(testFile);
-
-    testing::internal::CaptureStdout();
-    vm.start();
-    std::string output = testing::internal::GetCapturedStdout();
-
-    EXPECT_TRUE(output.find("JMP: target=11") != std::string::npos);
-    EXPECT_TRUE(output.find("LMM: R0 = 100") != std::string::npos);
-    EXPECT_TRUE(output.find("LMM: R0 = 999") == std::string::npos); // 应该被跳过
-
-    std::remove(testFile.c_str());
-}
-
-// ==== NCI v2.1 新增 10 条指令执行用例（Phase 2）====
+// ==== 手工字节码 helper（v2.1 编码迁移用例与新增 ISA 用例共用）====
 
 // 追加小端 32 位立即数
 static void appendImm32(std::vector<uint8_t>& code, int32_t v) {
@@ -329,6 +84,157 @@ static int32_t readStackInt32(NVirtualMachine& vm, int32_t addr) {
     memcpy(&v, vm.getStack() + addr, sizeof(v));
     return v;
 }
+
+// ==== v1 执行用例迁移至 NCI v2.1 编码（原 6 个 DISABLED_ 前缀用例）====
+// 迁移口径：v1 语义不变，编码换 v2.1（doc/Bytecode Format Specification
+// v2.1.md §3.1）；v1 的 TRAP 停机改为直线代码自然执行到 codeSize（或经
+// ret 弹出栈底哨兵）终止，trace 字符串断言改为寄存器/栈/PC 状态断言。
+
+// 测试虚拟机指令执行：v1 `lmm R0,10; add R0,5; trap 0` →
+// v2.1 立即数加法为 addi（0x11），直线执行到代码段末尾正常终止
+TEST(VMTest, InstructionExecution) {
+    NVirtualMachine vm(64 * 1024);
+
+    std::vector<uint8_t> code;
+    code.push_back(0x00);
+    code.push_back(0x00);
+    appendImm32(code, 10); // @0  lmm R0, 10
+    code.push_back(0x11);
+    code.push_back(0x00);
+    appendImm32(code, 5); // @6  addi R0, 5
+    loadRawCode(vm, code);
+    vm.start();
+
+    EXPECT_EQ(vm.getRegister(0), 15);             // 10 + 5
+    EXPECT_EQ(vm.getPC(), vm.getCodeSize());      // 正常终止：PC 停在代码段末尾
+    EXPECT_EQ(vm.getSP(), vm.getStackSize() - 4); // 无 call/ret，栈底哨兵未动
+}
+
+// 测试乘法指令：v1 `lmm R0,6; mul R0,7; trap 0` →
+// v2.1 立即数乘法为 muli（0x15），R0 = 42
+TEST(VMTest, MULInstruction) {
+    NVirtualMachine vm(64 * 1024);
+
+    std::vector<uint8_t> code;
+    code.push_back(0x00);
+    code.push_back(0x00);
+    appendImm32(code, 6); // @0 lmm R0, 6
+    code.push_back(0x15);
+    code.push_back(0x00);
+    appendImm32(code, 7); // @6 muli R0, 7
+    loadRawCode(vm, code);
+    vm.start();
+
+    EXPECT_EQ(vm.getRegister(0), 42); // 6 * 7
+    EXPECT_EQ(vm.getPC(), vm.getCodeSize());
+}
+
+// 测试除法指令：v1 `lmm R0,20; div R0,4; trap 0` →
+// v2.1 立即数除法为 divi（0x17），R0 = 5
+TEST(VMTest, DIVInstruction) {
+    NVirtualMachine vm(64 * 1024);
+
+    std::vector<uint8_t> code;
+    code.push_back(0x00);
+    code.push_back(0x00);
+    appendImm32(code, 20); // @0 lmm R0, 20
+    code.push_back(0x17);
+    code.push_back(0x00);
+    appendImm32(code, 4); // @6 divi R0, 4
+    loadRawCode(vm, code);
+    vm.start();
+
+    EXPECT_EQ(vm.getRegister(0), 5); // 20 / 4
+    EXPECT_EQ(vm.getPC(), vm.getCodeSize());
+}
+
+// 测试比较指令：v1 `eq R0,imm`（比较结果 0/1 直接落寄存器）在 v2.1 无对应
+// 指令，改写为等价场景：cmp 置 flags + jz 物化比较结果（相等 → 1，不等 → 0）。
+// 布局（32 字节）：
+//   @0  lmm R0,10   @6  lmm R1,10   @12 cmp R0,R1   @15 lmm R2,1
+//   @21 jz 32       @26 lmm R2,0（应被跳过）        @32 = codeSize
+TEST(VMTest, ComparisonInstructions) {
+    NVirtualMachine vm(64 * 1024);
+
+    std::vector<uint8_t> code;
+    code.push_back(0x00);
+    code.push_back(0x00);
+    appendImm32(code, 10); // @0  lmm R0, 10
+    code.push_back(0x00);
+    code.push_back(0x01);
+    appendImm32(code, 10); // @6  lmm R1, 10
+    code.push_back(0x30);
+    code.push_back(0x00);
+    code.push_back(0x01); // @12 cmp R0, R1 → Z 置位
+    code.push_back(0x00);
+    code.push_back(0x02);
+    appendImm32(code, 1); // @15 lmm R2, 1（相等 → 1）
+    code.push_back(0x51);
+    appendImm32(code, 32); // @21 jz 32
+    code.push_back(0x00);
+    code.push_back(0x02);
+    appendImm32(code, 0); // @26 lmm R2, 0（不等 → 0，应被跳过）
+    loadRawCode(vm, code);
+    vm.start();
+
+    EXPECT_EQ(vm.getRegister(2), 1);         // eq 语义等价：相等物化为 1
+    EXPECT_EQ(vm.getRegister(0), 10);        // cmp 不破坏操作数
+    EXPECT_NE(vm.getFlags() & FLAG_Z, 0);    // Z 置位
+    EXPECT_EQ(vm.getPC(), vm.getCodeSize()); // jz 落点即代码段末尾
+}
+
+// 测试栈操作指令：v1 `lmm R0,42; push R0; lmm R0,0; pop R0; trap 0` →
+// v2.1 PUSH=0x40 / POP=0x42（各 2 字节），栈向下生长，语义不变。
+// 布局（16 字节）：
+//   @0  lmm R0,42   @6  push R0   @8  lmm R0,0   @14 pop R0   @16 = codeSize
+TEST(VMTest, StackInstructions) {
+    NVirtualMachine vm(64 * 1024);
+
+    std::vector<uint8_t> code;
+    code.push_back(0x00);
+    code.push_back(0x00);
+    appendImm32(code, 42); // @0  lmm R0, 42
+    code.push_back(0x40);
+    code.push_back(0x00); // @6  push R0
+    code.push_back(0x00);
+    code.push_back(0x00);
+    appendImm32(code, 0); // @8  lmm R0, 0
+    code.push_back(0x42);
+    code.push_back(0x00); // @14 pop R0
+    loadRawCode(vm, code);
+    vm.start();
+
+    EXPECT_EQ(vm.getRegister(0), 42); // pop 复原 R0
+    EXPECT_EQ(readStackInt32(vm, vm.getSP() - 4),
+              42); // push 写入的栈内存残留值（pop 后 SP 已回退位）
+    EXPECT_EQ(vm.getSP(), vm.getStackSize() - 4); // push/pop 抵消，仅剩栈底哨兵
+    EXPECT_EQ(vm.getPC(), vm.getCodeSize());
+}
+
+// 测试跳转指令：v1 `jmp 11` 跳过 @5 的 lmm R0,999、执行 @11 的 lmm R0,100。
+// v2.1 JMP=0x50（opcode+ADDR32=5 字节），lmm 仍为 6 字节，地址布局与 v1 同构。
+// 布局（17 字节）：
+//   @0  jmp 11   @5  lmm R0,999（被跳过）   @11 lmm R0,100   @17 = codeSize
+TEST(VMTest, JumpInstructions) {
+    NVirtualMachine vm(64 * 1024);
+
+    std::vector<uint8_t> code;
+    code.push_back(0x50);
+    appendImm32(code, 11); // @0  jmp 11（跳到第二条 lmm）
+    code.push_back(0x00);
+    code.push_back(0x00);
+    appendImm32(code, 999); // @5  lmm R0, 999（应被跳过）
+    code.push_back(0x00);
+    code.push_back(0x00);
+    appendImm32(code, 100); // @11 lmm R0, 100
+    loadRawCode(vm, code);
+    vm.start();
+
+    EXPECT_EQ(vm.getRegister(0), 100); // 跳转目标指令已执行，999 未生效
+    EXPECT_EQ(vm.getPC(), vm.getCodeSize());
+}
+
+// ==== NCI v2.1 新增 10 条指令执行用例（Phase 2）====
 
 // LOADA/STOREA 绝对寻址走内存：pushi 压立即数，storea 写入、loada 读回
 TEST(VMTest, LoadStoreAbsoluteMemory) {
