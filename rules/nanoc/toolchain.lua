@@ -44,8 +44,9 @@
 -- 探测并按驱动名调整——两文件的钩子在重载沙箱里执行，无法共享顶层函数，
 -- 复制换自包含，见 nanoc.lua 同款注释）：
 --     1. 环境变量 NANOC：指向含 ncc-separate 的目录，或直接指向
---        ncc-separate 可执行文件（指向 ncc 主程序会报错给指引——主程序
---        只会整体编译，不是本形态的按文件编译器）；
+--        ncc-separate 可执行文件（无效——如指向 ncc 主程序——只警告并
+--        继续探测，与 rule 形态的直接报错不同：同一工程常把 NANOC 设给
+--        rule 形态，两形态并存时不应互相卡死）；
 --     2. 本工程内名为 ncc-separate 的 target（典型：include
 --        rules/nanoc/driver/xmake.lua 现场构建；配合 add_deps +
 --        build.fence 保证先建驱动后编 .nc）；
@@ -107,9 +108,11 @@ rule("nanoc.toolchain.build")
         -- ---------------------------------------------------------------
         local nccsep = target:data("nanoc.toolchain.nccsep")
         if not nccsep then
-            -- 1) 环境变量 NANOC：显式指定优先。目录 → 补 ncc-separate(.exe)；
-            --    文件 → 须是 ncc-separate 本体（指向 ncc 主程序报错给指引，
-            --    不静默回退，避免"以为在用 NANOC 实际用错编译器"）
+            -- 1) 环境变量 NANOC：目录 → 补 ncc-separate(.exe)；文件 → 须是
+            --    ncc-separate 本体。与 rule("nanoc") 的差异：这里 NANOC 无效
+            --    只警告并继续（rule 形态是直接报错）——同一工程常把 NANOC
+            --    设给 rule 形态的 ncc 主程序，toolchain 形态应继续探测工程
+            --    内 target / PATH，全落空时才报错并提示 NANOC 已设但无驱动
             local env_ncc = os.getenv("NANOC")
             if env_ncc and #env_ncc > 0 then
                 local candidate = env_ncc
@@ -120,9 +123,9 @@ rule("nanoc.toolchain.build")
                 if os.isfile(candidate) then
                     nccsep = candidate
                 else
-                    raise("toolchain(nanoc): 环境变量 NANOC=%s 未指向 ncc-separate" ..
-                        "（应为含 ncc-separate 的目录、ncc-separate 可执行文件路径；" ..
-                        "ncc 主程序只支持整体编译，不用于本形态）", env_ncc)
+                    wprint("toolchain(nanoc): 环境变量 NANOC=%s 下没有 ncc-separate" ..
+                        "（ncc 主程序只支持整体编译），继续按工程内 target / PATH 探测",
+                        env_ncc)
                 end
             end
             -- 2) 工程内名为 ncc-separate 的 target（现场构建驱动）。此处只取
@@ -144,7 +147,7 @@ rule("nanoc.toolchain.build")
                     nccsep = tool.program
                 end
             end
-            -- 4) 找不到 → 清晰报错 + 指引
+            -- 4) 找不到 → 清晰报错 + 指引（提示 NANOC 已设但无驱动的情况）
             if not nccsep then
                 raise([[
 toolchain(nanoc): 未找到 NanoC 独立编译驱动 ncc-separate！

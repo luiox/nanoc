@@ -73,7 +73,7 @@ rules 区，非 ncc/**）以独立驱动 `ncc-separate` 先行接线：
 
 | 优先级 | 来源 | 说明 |
 |---|---|---|
-| 1 | 环境变量 `NANOC` | 指向**含 ncc-separate 的目录**，或直接指向 ncc-separate 可执行文件；指向 ncc 主程序会报错给指引（主程序只支持整体编译） |
+| 1 | 环境变量 `NANOC` | 指向**含 ncc-separate 的目录**，或直接指向 ncc-separate 可执行文件；无效（如指向 ncc 主程序）只警告并继续探测——同一工程常把 `NANOC` 设给 rule 形态，两形态并存时不互相卡死 |
 | 2 | 工程内 target `ncc-separate` | include `rules/nanoc/driver/xmake.lua` 现场构建（样例的做法）；配合 `add_deps` + `build.fence` 保证先建驱动后编 `.nc` |
 | 3 | `PATH` 查找 | `lib.detect.find_tool`，绕过持久检测缓存 |
 | 4 | 都找不到 | 构建报错，打印完整指引 |
