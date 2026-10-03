@@ -46,11 +46,12 @@ LinkageTable buildLinkageTable(const Program& program) {
     // 位置对齐契约：ir::lower 的第二遍同序遍历 program.declarations，把函数
     // 与全局变量依序导出到 Module::functions / Module::globals，因此这里的
     // 收集顺序（先按类别过滤）与 IR 两个向量按下标一一对应。
-    // extern 声明（PRD R3）不进入 Module::functions（无函数体），这里同步跳过
+    // extern 声明（PRD R3）与头文件原型（PRD R9）不进入 Module::functions
+    // （无函数体），这里同步跳过
     for (const auto& decl : program.declarations) {
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
             const auto& func = static_cast<const FuncDeclaration&>(*decl);
-            if (func.isExtern) {
+            if (func.isExtern || func.isPrototype) {
                 continue;
             }
             LinkageEntry entry;

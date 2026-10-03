@@ -92,9 +92,9 @@ SemanticAnalyzer::analyze(const Program& program) {
     for (const auto& decl : program.declarations) {
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
             const auto& func = static_cast<const FuncDeclaration&>(*decl);
-            // extern 声明无函数体（PRD R3）：body == nullptr 是合法形态；
-            // 普通函数仍要求复合语句体
-            if (func.isExtern) {
+            // extern 声明（PRD R3）与头文件原型（PRD R9）无函数体：body ==
+            // nullptr 是合法形态；普通函数仍要求复合语句体
+            if (func.isExtern || func.isPrototype) {
                 continue;
             }
             if (func.body == nullptr || func.body->type != ASTNodeType::COMPOUND_STMT) {
@@ -142,15 +142,20 @@ SemanticAnalyzer::analyze(const Program& program) {
             m_currentFile = decl->sourceFile;
         }
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
-            // extern 声明无函数体（PRD R3）：登记签名后跳过函数体检查
-            if (static_cast<const FuncDeclaration&>(*decl).isExtern) {
+            // extern 声明（PRD R3）与头文件原型（PRD R9）无函数体：
+            // 登记签名后跳过函数体检查
+            const auto& func = static_cast<const FuncDeclaration&>(*decl);
+            if (func.isExtern || func.isPrototype) {
                 continue;
             }
-            checkFunctionBody(static_cast<const FuncDeclaration&>(*decl));
+            checkFunctionBody(func);
         } else if (decl->type == ASTNodeType::VAR_DECLARATION) {
             checkGlobalVariable(static_cast<const VarDeclaration&>(*decl));
         }
     }
+
+    // 收尾：未被定义覆盖的头文件原型补发全局摘要（PRD R9，见 declareGlobal）
+    flushPendingSummaries();
 
     return ca::Ok(std::move(m_result));
 }
@@ -182,7 +187,42 @@ const Symbol* SemanticAnalyzer::lookupSymbol(const std::string& name) const {
 bool SemanticAnalyzer::declareGlobal(const Symbol& symbol) {
     std::vector<std::size_t>& slots = m_globalByName[symbol.name];
     for (const std::size_t index : slots) {
-        const Symbol& existing = m_globalSymbols[index];
+        Symbol& existing = m_globalSymbols[index];
+        // 头文件函数原型合并（PRD R9，C 原型语义——决策记录）：
+        // - 任一方为原型且同为函数 → 签名兼容即合并为一条：原型+定义幂等
+        //  （定义覆盖原型槽位，definedIn/isExported 以定义为准）、原型+重复
+        //   原型幂等（保留首个）、定义+后随原型幂等（定义优先）；
+        // - 签名不兼容报 conflicting types；
+        // - 该规则不放宽既有冲突检查：extern 与 extern/定义、定义与定义
+        //   （同文件）等双方皆非原型的组合走下方原有规则，既有负例不变。
+        if (existing.kind == SymbolKind::Function && symbol.kind == SymbolKind::Function
+            && (existing.isPrototype || symbol.isPrototype)) {
+            bool compatible = existing.type == symbol.type
+                              && existing.paramTypes.len() == symbol.paramTypes.len()
+                              && existing.isVariadic == symbol.isVariadic;
+            if (compatible) {
+                for (ca::usize i = 0; i < symbol.paramTypes.len(); ++i) {
+                    if (!(existing.paramTypes[i] == symbol.paramTypes[i])) {
+                        compatible = false;
+                        break;
+                    }
+                }
+            }
+            if (!compatible) {
+                reportError(symbol.line,
+                            symbol.column,
+                            "conflicting types for '" + symbol.name + "'");
+                return false;
+            }
+            if (existing.isPrototype && !symbol.isPrototype) {
+                existing = symbol; // 定义覆盖原型槽位
+                if (!m_summarized[index]) {
+                    m_summarized[index] = 1;
+                    appendGlobalSummary(existing);
+                }
+            }
+            return true;
+        }
         // 重复定义规则（决策记录）：
         // - 同文件同名（函数/变量混用同命名空间）→ 沿用既有 redefinition 报错
         // - main 全局唯一：跨文件多个 main 报错（VM 入口标号不参与 mangle）
@@ -199,8 +239,24 @@ bool SemanticAnalyzer::declareGlobal(const Symbol& symbol) {
     }
     slots.push_back(m_globalSymbols.size());
     m_globalSymbols.push_back(symbol);
-    appendGlobalSummary(symbol);
+    m_summarized.push_back(0);
+    // 原型登记不立即产出摘要：若后续定义覆盖槽位，摘要以定义为准；保持
+    // 原型到分析结束时由 flushPendingSummaries 统一补发
+    if (!symbol.isPrototype) {
+        m_summarized.back() = 1;
+        appendGlobalSummary(symbol);
+    }
     return true;
+}
+
+// 分析收尾：未被定义覆盖的原型（以及一切未产出摘要的槽位）统一补发摘要
+void SemanticAnalyzer::flushPendingSummaries() {
+    for (std::size_t i = 0; i < m_globalSymbols.size(); ++i) {
+        if (!m_summarized[i]) {
+            m_summarized[i] = 1;
+            appendGlobalSummary(m_globalSymbols[i]);
+        }
+    }
 }
 
 const Symbol* SemanticAnalyzer::lookupGlobal(const std::string& name) const {
@@ -211,10 +267,13 @@ const Symbol* SemanticAnalyzer::lookupGlobal(const std::string& name) const {
     // 可见性解析（use 处文件 = m_currentFile）：
     // 1. 当前文件定义（私有或导出）；2. 任意文件的导出定义。
     // 单文件模式（definedIn 与 m_currentFile 皆为空）在 1 即命中，行为与
-    // 既有单文件语义一致
+    // 既有单文件语义一致。
+    // definedIn 为空 = 头文件/合成声明（PRD R9/R7）：C 翻译单元语义，全
+    // 编译单元可见（既有 .nc 声明恒带显示路径，不受此放宽影响）
     for (const std::size_t index : it->second) {
-        if (m_globalSymbols[index].definedIn == m_currentFile) {
-            return &m_globalSymbols[index];
+        const Symbol& symbol = m_globalSymbols[index];
+        if (symbol.definedIn.empty() || symbol.definedIn == m_currentFile) {
+            return &symbol;
         }
     }
     for (const std::size_t index : it->second) {
@@ -272,6 +331,7 @@ void SemanticAnalyzer::appendGlobalSummary(const Symbol& symbol) {
     summary.definedIn = symbol.definedIn;
     summary.isExported = symbol.isExported;
     summary.isExtern = symbol.isExtern;
+    summary.isPrototype = symbol.isPrototype;
     for (const auto& paramType : symbol.paramTypes) {
         summary.paramTypes.add(typeName(paramType));
     }
@@ -461,8 +521,11 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
     symbol.isExported = decl.isExported;
     symbol.isExtern = decl.isExtern;
     symbol.isVariadic = decl.isVariadic;
+    symbol.isPrototype = decl.isPrototype;
     for (const auto& param : decl.parameters) {
-        // 参数类型的诊断在 checkFunctionBody 中统一报告，此处静默计算
+        // 参数类型的诊断：头文件原型无函数体，签名阶段即报告（void* 形参等
+        // 不会被静默吞掉）；函数定义/extern 声明沿用既有策略（定义在
+        // checkFunctionBody 统一报告，extern 沿用静默口径不变）
         symbol.paramTypes.add(declaredType(param->type,
                                            param->isStructTag,
                                            param->pointerDepth,
@@ -471,7 +534,7 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
                                            param->arrayDims,
                                            param->line,
                                            param->column,
-                                           false));
+                                           decl.isPrototype));
     }
     declareGlobal(symbol);
 }
