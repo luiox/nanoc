@@ -1,14 +1,17 @@
 #include "nas/instruction.hpp"
 #include "ncc/codegen.hpp"
+#include "ncc/ir.hpp"
 #include "ncc/lexer.hpp"
 #include "ncc/parser.hpp"
 #include <gtest/gtest.h>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 // 桥接测试：ncc 产物必须能被 nas 直接汇编。
-// 代表性 .nc 源码 → Lexer/Parser/CodeGenerator → 汇编文本 → Assembler::assemble
-// 必须返回 ok（覆盖 extern 宿主调用、算术、控制流、函数、栈参、全局变量、递归）。
+// 代表性 .nc 源码 → Lexer/Parser → ir::lower → CodeGenerator（IR 发射）→
+// 汇编文本 → Assembler::assemble 必须返回 ok（覆盖 extern 宿主调用、算术、
+// 控制流、函数、栈参、全局变量、递归）。
 
 namespace {
 
@@ -17,9 +20,15 @@ namespace {
         std::vector<Token> tokens = lexer.tokenize();
         Parser parser(tokens);
         auto program = parser.parse();
+        auto lowered = ir::lower(*program);
+        if (lowered.is_err()) {
+            FAIL() << tag << " | lower: " << lowered.unwrap_err();
+            return;
+        }
+        ir::Module module = std::move(lowered).unwrap(); // Module 只移动
 
         CodeGenerator codegen;
-        std::string assembly = codegen.generate(*program);
+        std::string assembly = codegen.generate(module);
         ASSERT_FALSE(assembly.empty()) << tag;
 
         AssemblyResult result = Assembler::assemble(assembly);

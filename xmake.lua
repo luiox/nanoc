@@ -65,8 +65,9 @@ target("compile_examples")
     add_files("ncc/src/ncc/lexer.cpp")
     add_files("ncc/src/ncc/parser.cpp")
     add_files("ncc/src/ncc/codegen.cpp")
+    add_files("ncc/src/ncc/ir.cpp")
     add_files("ncc/src/ncc/ast.cpp")
-    add_packages("spdlog")
+    add_packages("spdlog", "libca")
 
 --
 -- If you want to known more usage about xmake, please see https://xmake.io

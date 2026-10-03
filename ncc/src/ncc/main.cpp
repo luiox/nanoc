@@ -1,4 +1,5 @@
 #include "ncc/codegen.hpp"
+#include "ncc/ir.hpp"
 #include "ncc/lexer.hpp"
 #include "ncc/loader.hpp"
 #include "ncc/parser.hpp"
@@ -53,12 +54,17 @@ namespace {
         mf.metavar = "<file>";
         mf.help = "dependency file path (use with -MMD)";
 
+        ca::opt::Arg dumpIr;
+        dumpIr.name = "dump-ir";
+        dumpIr.kind = ca::opt::OptKind::Flag;
+        dumpIr.help = "dump the lowered IR module to stderr for debugging";
+
         ca::opt::Arg version;
         version.name = "version";
         version.kind = ca::opt::OptKind::Flag;
         version.help = "print ncc version and exit";
 
-        root.args = { files, output, emit, mmd, mf, version };
+        root.args = { files, output, emit, mmd, mf, dumpIr, version };
         return root;
     }
 
@@ -177,8 +183,25 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // 语义通过 → ir::lower → IR 代码生成（PRD R1.3-ii/R1.4 后端管线）。
+        // lower 输入契约 = 已通过语义分析；契约级失败按内部错误处理
+        auto lowered = ir::lower(*loaded.program);
+        if (lowered.is_err()) {
+            std::cerr << "ncc: error: " << lowered.unwrap_err() << "\n";
+            return 1;
+        }
+        ir::Module module = std::move(lowered).unwrap(); // Module 只移动
+
+        if (options.has("dump-ir")) {
+            print_text(std::cerr, module.dump());
+        }
+
+        // 多文件 mangle 所需的顶层符号链接信息（IR 未建模 sourceFile/export，
+        // 以位置对齐 side-table 绕过，见 LinkageEntry 注释）
+        LinkageTable linkage = buildLinkageTable(*loaded.program);
+
         CodeGenerator codegen;
-        assembly = codegen.generate(*loaded.program);
+        assembly = codegen.generate(module, &linkage);
     } catch (const std::exception& e) {
         std::cerr << "ncc: error: " << e.what() << "\n";
         return 1;

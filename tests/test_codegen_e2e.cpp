@@ -1,5 +1,6 @@
 #include "nas/instruction.hpp"
 #include "ncc/codegen.hpp"
+#include "ncc/ir.hpp"
 #include "ncc/lexer.hpp"
 #include "ncc/parser.hpp"
 #include "nvm/core.hpp"
@@ -9,8 +10,9 @@
 #include <sstream>
 #include <string>
 
-// 最小 e2e：.nc 源码 → Lexer/Parser/CodeGenerator → 汇编文本 → Assembler::assemble
-// → 落盘 .nci → NVirtualMachine 加载并执行 → 断言 R0 返回值。
+// 最小 e2e：.nc 源码 → Lexer/Parser → ir::lower → CodeGenerator（IR 发射）→
+// 汇编文本 → Assembler::assemble → 落盘 .nci → NVirtualMachine 加载并执行 →
+// 断言 R0 返回值。
 // 纯 VM 计算，不注册宿主函数；main 顶层 leave/ret 由 VM 栈底哨兵终止。
 
 namespace {
@@ -29,9 +31,15 @@ namespace {
         std::vector<Token> tokens = lexer.tokenize();
         Parser parser(tokens);
         auto program = parser.parse();
+        auto lowered = ir::lower(*program);
+        if (lowered.is_err()) {
+            ADD_FAILURE() << "lower failed: " << lowered.unwrap_err();
+            return -1;
+        }
+        ir::Module module = std::move(lowered).unwrap(); // Module 只移动
 
         CodeGenerator codegen;
-        std::string assembly = codegen.generate(*program);
+        std::string assembly = codegen.generate(module);
         if (hostFn != nullptr) {
             std::ostringstream pinned;
             pinned << "extern " << hostName << " 0x" << std::hex << kHostStrlenAddr

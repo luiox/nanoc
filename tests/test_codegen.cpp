@@ -1,7 +1,9 @@
 #include "ncc/codegen.hpp"
+#include "ncc/ir.hpp"
 #include "ncc/lexer.hpp"
 #include "ncc/parser.hpp"
 #include <gtest/gtest.h>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -9,6 +11,7 @@
 // 助记符约定见 doc/Bytecode Format Specification v2.1.md：
 // enter/leave/ret 帧管理、cmp/test 置 flags + jz/jnz/jn/jp 条件跳转、
 // load/store [R6] 间接寻址、R4=SP（addi R4 清栈）、R0 返回值。
+// 管线：Lexer/Parser → ir::lower → CodeGenerator（IR 发射路径）。
 
 namespace {
 
@@ -17,8 +20,13 @@ namespace {
         std::vector<Token> tokens = lexer.tokenize();
         Parser parser(tokens);
         auto program = parser.parse();
+        auto lowered = ir::lower(*program);
+        if (lowered.is_err()) {
+            throw std::runtime_error(lowered.unwrap_err());
+        }
+        ir::Module module = std::move(lowered).unwrap(); // Module 只移动
         CodeGenerator codegen;
-        return codegen.generate(*program);
+        return codegen.generate(module);
     }
 
 } // namespace
