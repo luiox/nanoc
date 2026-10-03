@@ -18,9 +18,9 @@ enum class NTokenKind : int {
     KEYWORD_RETURN,
     KEYWORD_BREAK,
     KEYWORD_CONTINUE,
-    KEYWORD_NULL,     // NULL：空指针常量（PRD R1.2）
-    KEYWORD_STRUCT,   // struct：结构体定义/类型引用（PRD R1.2 第二批）
-    KEYWORD_TYPEDEF,  // typedef：类型别名（PRD R1.2 第二批）
+    KEYWORD_NULL,    // NULL：空指针常量（PRD R1.2）
+    KEYWORD_STRUCT,  // struct：结构体定义/类型引用（PRD R1.2 第二批）
+    KEYWORD_TYPEDEF, // typedef：类型别名（PRD R1.2 第二批）
 
     // Identifiers
     IDENTIFIER,

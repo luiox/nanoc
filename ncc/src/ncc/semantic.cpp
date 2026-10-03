@@ -7,8 +7,7 @@
 
 // 条件上下文可用的类型：标量/指针/NULL（非零为真）
 static bool isConditionType(const SemanticType& type) {
-    return type.kind == SemanticType::Kind::Int
-           || type.kind == SemanticType::Kind::Char
+    return type.kind == SemanticType::Kind::Int || type.kind == SemanticType::Kind::Char
            || type.kind == SemanticType::Kind::Pointer
            || type.kind == SemanticType::Kind::Null;
 }
@@ -27,30 +26,30 @@ bool SemanticType::operator==(const SemanticType& other) const {
     return *element == *other.element;
 }
 
-const SemanticType SemanticType::Int{Kind::Int, "", nullptr};
-const SemanticType SemanticType::Char{Kind::Char, "", nullptr};
-const SemanticType SemanticType::Void{Kind::Void, "", nullptr};
-const SemanticType SemanticType::Error{Kind::Error, "", nullptr};
-const SemanticType SemanticType::Null{Kind::Null, "", nullptr};
+const SemanticType SemanticType::Int{ Kind::Int, "", nullptr };
+const SemanticType SemanticType::Char{ Kind::Char, "", nullptr };
+const SemanticType SemanticType::Void{ Kind::Void, "", nullptr };
+const SemanticType SemanticType::Error{ Kind::Error, "", nullptr };
+const SemanticType SemanticType::Null{ Kind::Null, "", nullptr };
 const SemanticType SemanticType::IntPtr = pointerTo(Int);
 const SemanticType SemanticType::CharPtr = pointerTo(Char);
 const SemanticType SemanticType::IntArray = arrayOf(Int);
 const SemanticType SemanticType::CharArray = arrayOf(Char);
 
 SemanticType SemanticType::structOf(std::string structTag) {
-    return SemanticType{Kind::Struct, std::move(structTag), nullptr};
+    return SemanticType{ Kind::Struct, std::move(structTag), nullptr };
 }
 
 SemanticType SemanticType::pointerTo(SemanticType pointee) {
-    return SemanticType{Kind::Pointer,
-                        "",
-                        std::make_shared<const SemanticType>(std::move(pointee))};
+    return SemanticType{ Kind::Pointer,
+                         "",
+                         std::make_shared<const SemanticType>(std::move(pointee)) };
 }
 
 SemanticType SemanticType::arrayOf(SemanticType elem) {
-    return SemanticType{Kind::Array,
-                        "",
-                        std::make_shared<const SemanticType>(std::move(elem))};
+    return SemanticType{ Kind::Array,
+                         "",
+                         std::make_shared<const SemanticType>(std::move(elem)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -212,9 +211,7 @@ void SemanticAnalyzer::registerStructDeclaration(const StructDeclaration& decl) 
 
     auto existing = m_structs.find(decl.tag);
     if (existing != m_structs.end() && existing->second.complete) {
-        reportError(decl.line,
-                    decl.column,
-                    "redefinition of 'struct " + decl.tag + "'");
+        reportError(decl.line, decl.column, "redefinition of 'struct " + decl.tag + "'");
         return;
     }
 
@@ -434,11 +431,7 @@ void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
         appendGlobalSummary(symbol);
     }
     if (decl.initializer) {
-        checkInitializer(*decl.initializer,
-                         declared,
-                         decl.name,
-                         decl.line,
-                         decl.column);
+        checkInitializer(*decl.initializer, declared, decl.name, decl.line, decl.column);
     }
 }
 
@@ -546,11 +539,7 @@ void SemanticAnalyzer::checkLocalVariable(const StmtVarDeclaration& decl) {
     symbol.column = decl.column;
     declareVariable(symbol); // 冲突时已报错；登记失败则查找命中先登记的符号
     if (decl.initializer) {
-        checkInitializer(*decl.initializer,
-                         declared,
-                         decl.name,
-                         decl.line,
-                         decl.column);
+        checkInitializer(*decl.initializer, declared, decl.name, decl.line, decl.column);
     }
 }
 
@@ -1104,9 +1093,7 @@ void SemanticAnalyzer::checkInitializer(const Expr& initializer,
         return;
     }
     if (declared.kind != SemanticType::Kind::Struct) {
-        reportError(line,
-                    column,
-                    "brace initializer is only supported for struct types");
+        reportError(line, column, "brace initializer is only supported for struct types");
         return;
     }
     const StructInfo* info = lookupStruct(declared.tag);
@@ -1302,8 +1289,7 @@ std::string SemanticAnalyzer::typeName(const SemanticType& type) {
 }
 
 bool SemanticAnalyzer::isScalar(const SemanticType& type) {
-    return type.kind == SemanticType::Kind::Int
-           || type.kind == SemanticType::Kind::Char;
+    return type.kind == SemanticType::Kind::Int || type.kind == SemanticType::Kind::Char;
 }
 
 // ---- 类型工具（PRD R1.2） ----
@@ -1425,7 +1411,8 @@ SemanticType SemanticAnalyzer::declaredType(const std::string& baseName,
         return SemanticType::Error;
     }
 
-    if (pointerDepth > 1 || (pointerDepth == 1 && base.kind == SemanticType::Kind::Pointer)) {
+    if (pointerDepth > 1
+        || (pointerDepth == 1 && base.kind == SemanticType::Kind::Pointer)) {
         if (report) {
             reportError(line,
                         column,

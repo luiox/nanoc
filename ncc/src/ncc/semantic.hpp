@@ -47,8 +47,8 @@ struct SemanticType {
     enum class Kind { Int, Char, Void, Error, Null, Pointer, Array, Struct };
 
     Kind kind = Kind::Error;
-    std::string tag;                              // 仅 Kind::Struct 有效
-    std::shared_ptr<const SemanticType> element;  // 仅 Pointer/Array 有效
+    std::string tag;                             // 仅 Kind::Struct 有效
+    std::shared_ptr<const SemanticType> element; // 仅 Pointer/Array 有效
 
     SemanticType() = default;
     SemanticType(Kind k, std::string t, std::shared_ptr<const SemanticType> e)

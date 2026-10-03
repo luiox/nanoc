@@ -207,9 +207,8 @@ std::string Parser::parseTypePrefix(bool& isStructTag, int& line, int& column) {
 }
 
 // struct 主体：`{ field; field; ... }`（不含结尾分号；tag 调用方已消费）
-std::unique_ptr<StructDeclaration> Parser::parseStructBody(const std::string& tag,
-                                                           int line,
-                                                           int column) {
+std::unique_ptr<StructDeclaration>
+Parser::parseStructBody(const std::string& tag, int line, int column) {
     auto structDecl = std::make_unique<StructDeclaration>(tag, line, column);
     expect(NTokenKind::DELIMITER_LBRACE);
 
@@ -946,7 +945,8 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
             std::string member = currentToken().value;
             advance();
 
-            expr = std::make_unique<MemberExpr>(std::move(expr), member, arrow, line, column);
+            expr =
+              std::make_unique<MemberExpr>(std::move(expr), member, arrow, line, column);
             continue;
         }
         break;

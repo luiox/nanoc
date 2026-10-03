@@ -37,8 +37,8 @@ enum class ASTNodeType {
     STRING_LITERAL,
     NULL_LITERAL,
     INDEX_EXPR,
-    MEMBER_EXPR,     // p.x / p->x 成员访问（PRD R1.2 第二批）
-    INIT_LIST_EXPR,  // { e1, e2, ... } 逐成员初始化器（PRD R1.2 第二批）
+    MEMBER_EXPR,    // p.x / p->x 成员访问（PRD R1.2 第二批）
+    INIT_LIST_EXPR, // { e1, e2, ... } 逐成员初始化器（PRD R1.2 第二批）
 
     // 其他
     PARAMETER,
@@ -151,10 +151,10 @@ public:
 //       typedef struct { ... } Anonymous;（structDef 非空）/ typedef int* IntPtr;
 class TypedefDeclaration : public Decl {
 public:
-    std::string baseType;     // 基础类型名（int/char/标签/别名）
-    bool baseIsStruct = false; // baseType 带 struct 前缀
-    int pointerDepth = 0;      // 别名上的指针层级
-    std::string alias;         // 别名
+    std::string baseType;                         // 基础类型名（int/char/标签/别名）
+    bool baseIsStruct = false;                    // baseType 带 struct 前缀
+    int pointerDepth = 0;                         // 别名上的指针层级
+    std::string alias;                            // 别名
     std::unique_ptr<StructDeclaration> structDef; // 内联 struct 定义（可空）
 
     TypedefDeclaration(const std::string& aliasName, int l, int c)

@@ -1221,8 +1221,7 @@ int main() {
 }
 )";
     SemanticResult result = analyzeSource(source);
-    expectDiagnostics(result,
-                      { "test.nc:4:15: error: invalid operands to binary '+'" });
+    expectDiagnostics(result, { "test.nc:4:15: error: invalid operands to binary '+'" });
 }
 
 // 负例：不同 struct 之间赋值
@@ -1284,8 +1283,7 @@ struct P { int b; };
 int main() { return 0; }
 )";
     SemanticResult result = analyzeSource(source);
-    expectDiagnostics(result,
-                      { "test.nc:2:1: error: redefinition of 'struct P'" });
+    expectDiagnostics(result, { "test.nc:2:1: error: redefinition of 'struct P'" });
 }
 
 // 负例：自引用值成员（incomplete，仅自引用指针合法）
@@ -1497,8 +1495,7 @@ int main() {
 }
 )";
     SemanticResult result = analyzeSource(source);
-    expectDiagnostics(result,
-                      { "test.nc:5:14: error: invalid operands to binary '=='" });
+    expectDiagnostics(result, { "test.nc:5:14: error: invalid operands to binary '=='" });
 }
 
 // 负例：匿名 struct 的内部标签不可直接引用

@@ -403,15 +403,14 @@ TEST(CodegenTest, StructLocalLayoutAndMemberAddressing) {
 
 // struct 嵌套布局：Rect = 2×Point = 4 字 → enter 16；r.br.y 偏移 3 字 = 12
 TEST(CodegenTest, StructNestedMemberOffset) {
-    std::string assembly =
-      compile("struct Point { int x; int y; };\n"
-              "struct Rect { struct Point tl; struct Point br; };\n"
-              "int main() {\n"
-              "    struct Rect r;\n"
-              "    r.tl.x = 1;\n"
-              "    r.br.y = 2;\n"
-              "    return 0;\n"
-              "}");
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "struct Rect { struct Point tl; struct Point br; };\n"
+                                   "int main() {\n"
+                                   "    struct Rect r;\n"
+                                   "    r.tl.x = 1;\n"
+                                   "    r.br.y = 2;\n"
+                                   "    return 0;\n"
+                                   "}");
 
     EXPECT_TRUE(assembly.find("enter 16") != std::string::npos);
     // 成员链逐级累加偏移：r.br → +8（tl 占 2 字），再 .y → +4

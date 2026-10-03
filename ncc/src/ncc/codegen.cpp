@@ -218,10 +218,9 @@ void CodeGenerator::registerGlobal(VarDeclaration& node) {
     Symbol symbol;
     symbol.kind = SymKind::Global;
     symbol.label = ".g_" + node.name;
-    symbol.type =
-      canonicalType(resolveBaseType(node.type, node.isStructTag),
-                    node.pointerDepth,
-                    node.isArray);
+    symbol.type = canonicalType(resolveBaseType(node.type, node.isStructTag),
+                                node.pointerDepth,
+                                node.isArray);
     symbol.isArray = node.isArray;
     symbol.arraySize = node.arraySize;
     m_globalSymbols[node.name] = symbol;
@@ -236,8 +235,7 @@ void CodeGenerator::registerGlobal(VarDeclaration& node) {
         if (layout == nullptr) {
             throw std::runtime_error("array initializers are not supported");
         }
-        for (size_t i = 0; i < initList.values.size() && i < layout->fields.size();
-             ++i) {
+        for (size_t i = 0; i < initList.values.size() && i < layout->fields.size(); ++i) {
             if (initList.values[i]->type == ASTNodeType::INIT_LIST_EXPR) {
                 throw std::runtime_error("nested initializers are not supported");
             }
@@ -460,10 +458,10 @@ int CodeGenerator::countLocalSlots(Stmt* stmt) const {
     case ASTNodeType::VAR_DECLARATION: { // 语句上下文的声明节点（StmtVarDeclaration）
         auto& varDecl = static_cast<StmtVarDeclaration&>(*stmt);
         // struct 值按布局字数占槽；数组按元素数 × 元素字数
-        const std::string type = canonicalType(
-          resolveBaseType(varDecl.type, varDecl.isStructTag),
-          varDecl.pointerDepth,
-          varDecl.isArray);
+        const std::string type =
+          canonicalType(resolveBaseType(varDecl.type, varDecl.isStructTag),
+                        varDecl.pointerDepth,
+                        varDecl.isArray);
         int words = typeSizeWords(type);
         if (varDecl.isArray) {
             // 数组元素类型 = 去掉 "[]" 后缀（struct 元素按布局字数）
@@ -501,8 +499,7 @@ int CodeGenerator::structTempWords(const Expr* expr) {
         auto& call = static_cast<const CallExpr&>(*expr);
         int words = 0;
         auto it = m_functionReturns.find(call.callee);
-        const std::string returnType =
-          it != m_functionReturns.end() ? it->second : "int";
+        const std::string returnType = it != m_functionReturns.end() ? it->second : "int";
         if (const StructLayout* layout = structLayoutOf(returnType)) {
             words += std::max(layout->sizeWords, 1);
         }
@@ -572,7 +569,8 @@ int CodeGenerator::countStructTemps(const Stmt* stmt) {
     }
     case ASTNodeType::IF_STMT: {
         auto& ifStmt = static_cast<const IfStmt&>(*stmt);
-        return structTempWords(ifStmt.condition.get()) + countStructTemps(ifStmt.thenBranch.get())
+        return structTempWords(ifStmt.condition.get())
+               + countStructTemps(ifStmt.thenBranch.get())
                + countStructTemps(ifStmt.elseBranch.get());
     }
     case ASTNodeType::WHILE_STMT: {
@@ -600,8 +598,7 @@ int CodeGenerator::countStructTemps(const Stmt* stmt) {
 
 int CodeGenerator::allocStructTemp(int sizeWords) {
     if (m_tempCursor + sizeWords > m_tempLimit) {
-        throw std::runtime_error(
-          "internal error: struct temporary slots exhausted");
+        throw std::runtime_error("internal error: struct temporary slots exhausted");
     }
     // 块占 [cursor+1 .. cursor+sizeWords] 号槽；返回最高槽号作为基址
     // （与栈布局一致：地址 BP-4*槽号，槽号越大地址越低，拷贝向高地址延伸）
@@ -668,10 +665,10 @@ void CodeGenerator::visit(Program& node) {
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
             auto& func = static_cast<FuncDeclaration&>(*decl);
             m_functions.insert(func.name);
-            m_functionReturns[func.name] = canonicalType(
-              resolveBaseType(func.returnType, func.returnIsStruct),
-              func.returnPointerDepth,
-              false);
+            m_functionReturns[func.name] =
+              canonicalType(resolveBaseType(func.returnType, func.returnIsStruct),
+                            func.returnPointerDepth,
+                            false);
         } else if (decl->type == ASTNodeType::VAR_DECLARATION) {
             registerGlobal(static_cast<VarDeclaration&>(*decl));
         }
@@ -754,12 +751,11 @@ void CodeGenerator::visit(FuncDeclaration& node) {
     const bool isMain = (node.name == "main");
 
     const std::string returnType =
-      m_functionReturns.count(node.name) > 0 ? m_functionReturns.at(node.name)
-                                             : canonicalType(
-                                                 resolveBaseType(node.returnType,
-                                                                 node.returnIsStruct),
-                                                 node.returnPointerDepth,
-                                                 false);
+      m_functionReturns.count(node.name) > 0
+        ? m_functionReturns.at(node.name)
+        : canonicalType(resolveBaseType(node.returnType, node.returnIsStruct),
+                        node.returnPointerDepth,
+                        false);
     const StructLayout* returnLayout = structLayoutOf(returnType);
     const bool returnsStruct = returnLayout != nullptr;
     m_structReturnTag = returnsStruct ? returnType : std::string();
@@ -1247,8 +1243,8 @@ void CodeGenerator::visit(IndexExpr& node) {
     // a[i] / p[i]：元素地址 → LOAD；struct 元素地址即 struct 值，不 LOAD
     emitElementAddress(node);
     const std::string baseType = decayedTypeName(exprType(*node.base));
-    const std::string element = isArrayTypeName(baseType) ? arrayElement(baseType)
-                                                          : pointerPointee(baseType);
+    const std::string element =
+      isArrayTypeName(baseType) ? arrayElement(baseType) : pointerPointee(baseType);
     if (structLayoutOf(element) == nullptr) {
         emit("    load R0, [R0]");
     }
@@ -1259,9 +1255,9 @@ void CodeGenerator::visit(MemberExpr& node) {
     const FieldLayout* field = nullptr;
     emitMemberAddress(node, &field);
     // 成员为标量/指针 → LOAD 取值；struct/array 成员地址即值（数组名退化）
-    const bool loadNeeded = field == nullptr
-                            || (structLayoutOf(field->type) == nullptr
-                                && !isArrayTypeName(field->type));
+    const bool loadNeeded =
+      field == nullptr
+      || (structLayoutOf(field->type) == nullptr && !isArrayTypeName(field->type));
     if (loadNeeded) {
         emit("    load R0, [R0]");
     }
@@ -1301,8 +1297,7 @@ void CodeGenerator::visit(StmtVarDeclaration& node) {
             if (layout == nullptr) {
                 throw std::runtime_error("array initializers are not supported");
             }
-            for (size_t i = 0;
-                 i < initList.values.size() && i < layout->fields.size();
+            for (size_t i = 0; i < initList.values.size() && i < layout->fields.size();
                  ++i) {
                 initList.values[i]->accept(*this);
                 emitStructAddressOfSymbol(symbol); // 基址 → R0
@@ -1337,13 +1332,10 @@ void CodeGenerator::visit(StmtVarDeclaration& node) {
 void CodeGenerator::emitAddressOfSymbol(const Symbol& sym) {
     switch (sym.kind) {
     case SymKind::Local: {
-        const int elementWords = sym.isArray
-                                   ? typeSizeWords(arrayElement(sym.type))
-                                   : 1;
+        const int elementWords = sym.isArray ? typeSizeWords(arrayElement(sym.type)) : 1;
         const int blockWords =
-          sym.isArray
-            ? std::max(sym.arraySize, 1) * elementWords
-            : typeSizeWords(sym.type); // struct 值占多槽；标量/指针 1 槽
+          sym.isArray ? std::max(sym.arraySize, 1) * elementWords
+                      : typeSizeWords(sym.type); // struct 值占多槽；标量/指针 1 槽
         const int slotOffset = sym.slot + std::max(blockWords, 1) - 1;
         emit("    mov R0, R5");
         emit("    subi R0, " + std::to_string(4 * slotOffset));
@@ -1531,7 +1523,8 @@ std::string CodeGenerator::exprType(const Expr& expr) const {
         return "int"; // - !
     }
     case ASTNodeType::INDEX_EXPR: {
-        const std::string t = decayedTypeName(exprType(*static_cast<const IndexExpr&>(expr).base));
+        const std::string t =
+          decayedTypeName(exprType(*static_cast<const IndexExpr&>(expr).base));
         if (isPointerTypeName(t)) {
             return pointerPointee(t);
         }

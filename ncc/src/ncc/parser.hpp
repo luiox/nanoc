@@ -17,7 +17,7 @@ public:
 private:
     std::vector<Token> m_tokens;
     size_t m_pos;
-    int m_anonCounter = 0;              // 匿名 struct 内部标签计数（__anon_N）
+    int m_anonCounter = 0;                // 匿名 struct 内部标签计数（__anon_N）
     std::set<std::string> m_typedefNames; // 已解析的 typedef 别名（文件作用域）
 
     // 辅助函数
@@ -34,9 +34,8 @@ private:
     std::unique_ptr<VarDeclaration> parseVarDeclaration();
     std::unique_ptr<FuncDeclaration> parseFuncDeclaration();
     std::unique_ptr<Decl> parseTypedefDeclaration();
-    std::unique_ptr<StructDeclaration> parseStructBody(const std::string& tag,
-                                                       int line,
-                                                       int column);
+    std::unique_ptr<StructDeclaration>
+    parseStructBody(const std::string& tag, int line, int column);
     std::unique_ptr<Stmt> parseStatement();
     std::unique_ptr<Stmt> parseVarDeclarationStmt();
     std::unique_ptr<CompoundStmt> parseCompoundStatement();

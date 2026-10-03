@@ -73,7 +73,7 @@ private:
         std::string type;  // 规范类型名：int/char/int*/char*/int[]/char[]/
                            // struct T / struct T* / struct T[]
         bool isArray = false;
-        int arraySize = 0;     // 数组元素数（isArray 时有效）
+        int arraySize = 0;          // 数组元素数（isArray 时有效）
         bool isStructParam = false; // struct 形参：槽位存副本地址（type 为 struct T*）
     };
 
@@ -92,9 +92,9 @@ private:
     };
 
     struct GlobalInit {
-        std::string label; // 目标数据标号
+        std::string label;   // 目标数据标号
         int offsetWords = 0; // struct 逐成员初始化的字偏移（标量为 0）
-        Expr* expr;        // 初始化表达式（借用 AST 所有权）
+        Expr* expr;          // 初始化表达式（借用 AST 所有权）
     };
 
     // 输出缓冲：函数体与数据段分开收集，最后统一拼装
@@ -143,8 +143,8 @@ private:
 
     // 类型解析（typedef/struct 透明展开）与规范名工具
     std::string resolveBaseType(const std::string& name, bool isStructTag) const;
-    std::string canonicalType(const std::string& base, int pointerDepth, bool isArray)
-      const;
+    std::string
+    canonicalType(const std::string& base, int pointerDepth, bool isArray) const;
     const StructLayout* structLayoutOf(const std::string& type) const;
     const StructLayout* findFieldLayout(const std::string& type) const;
     const FieldLayout* findField(const StructLayout& layout,
