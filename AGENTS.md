@@ -2,12 +2,14 @@
 
 ## Project Overview
 
-NanoC is a simple C-like language compiler that runs on a custom virtual machine. The project consists of:
-- **ncc/** - NanoC compiler (lexer, parser, AST, codegen)
-- **nvm/** - Virtual machine runtime
-- **nas/** - Assembler
-- **tests/** - GoogleTest-based test suite
-- **examples/** - Sample NanoC programs
+NanoC is a simple C-like language with one shared frontend/IR and three backends
+(NAS/VM, C, LLVM-in-progress). The project consists of:
+- **ncc/** - NanoC compiler (lexer, parser, AST, semantic, IR, NAS/C backends, multi-file loading)
+- **nvm/** - Virtual machine runtime (loader, host-function dispatch, `--host-lib` dynamic linking)
+- **nas/** - Assembler + NCI v2.1 linker (`nas -r`)
+- **rules/nanoc/** - xmake `rule("nanoc")` for building `.nc` sources
+- **tests/** - GoogleTest-based test suite (incl. R13 differential matrix)
+- **examples/** - Sample NanoC programs + hello_project xmake sample
 
 ---
 
@@ -170,8 +172,10 @@ Fully defined by `.clang-format` (`IncludeCategories`). The effective rule in ev
 2. Angle-bracket headers, alphabetical (e.g. `<fstream>`, `<gtest/gtest.h>`, `<string>`) —
    external libs only (gtest/spdlog/libca)
 
-Include roots are the module `src` dirs (`ncc/src`, `nvm/src`, `nas/src`), so every file —
-including sibling files inside the same module — writes the full module-prefixed path.
+Include roots are the module `src` dirs (`ncc/src`, `nvm/src`, `nas/src`) plus the
+`tests` dir itself (`xmake.lua` adds `tests` as include root), so every file —
+including sibling files inside the same module — writes the full module-prefixed path
+(e.g. `"ncc/lexer.hpp"`, `"support/diff_harness.hpp"` from `tests/`).
 Never use bare filenames (`"lexer.hpp"`) or `../`-relative paths (`"../ncc/lexer.hpp"`).
 
 Don't hand-sort includes — run `clang-format` on the files you touch.
@@ -239,36 +243,49 @@ NanoC/
 ├── ncc/           # Compiler source — layout: <module>/src/<module>/ (module-prefixed includes)
 │   └── src/ncc/
 │       ├── lexer.hpp/.cpp      # Tokenizer
-│       ├── parser.hpp/.cpp     # AST parser
+│       ├── parser.hpp/.cpp     # AST parser（多文件 import/export、extern 声明）
 │       ├── ast.hpp/.cpp        # AST node definitions
-│       ├── codegen.hpp/.cpp    # Code generation
-│       └── main.cpp            # CLI entry point (libca opt)
+│       ├── semantic.hpp/.cpp   # 语义分析（作用域栈/类型检查/file:line:col 诊断）
+│       ├── ir.hpp/.cpp         # IR 数据模型与 AST 降级器（非 SSA，可 --dump-ir）
+│       ├── codegen.hpp/.cpp    # NAS 后端：ir::Module → 文本汇编
+│       ├── c_backend.hpp/.cpp  # C 后端：ir::Module → 可读 C（--emit=c）
+│       ├── loader.hpp          # 多文件装载（import 闭包，header-only）
+│       └── main.cpp            # CLI entry point（libca opt：--emit=asm|c、-o、-MMD/-MF）
 ├── nvm/           # Virtual machine
 │   └── src/nvm/
-│       ├── core.hpp/.cpp       # VM implementation
+│       ├── core.hpp/.cpp       # VM implementation（加载器/宿主分发/--host-lib 动态链接）
 │       ├── instructions.hpp    # Instruction set
 │       ├── string_helper.hpp   # Utility
 │       ├── handlers/           # Per-instruction handler methods
-│       └── main.cpp            # VM runner
-├── nas/           # Assembler
+│       └── main.cpp            # VM runner（--host-lib、--Xss）
+├── nas/           # Assembler + linker
 │   └── src/nas/
 │       ├── instruction.hpp/.cpp  # Instruction parsing & encoding
-│       └── main.cpp              # Assembler entry
-├── tests/         # GoogleTest tests
+│       ├── linker.hpp/.cpp       # NCI v2.1 链接器（nas -r：段合并/重定位/符号解析）
+│       └── main.cpp              # Assembler entry（-r 链接模式）
+├── rules/nanoc/   # xmake rule("nanoc")：.nc → ncc --emit=c → 内置 C 工具链（样例见 examples/hello_project）
+├── tests/         # GoogleTest tests（include root = tests/，support/ 头按模块前缀引用）
 │   ├── test_main.cpp            # Test runner
-│   ├── test_lexer.cpp
-│   ├── test_parser.cpp
-│   ├── test_codegen.cpp
+│   ├── support/                 # 差分测试共用 harness（diff_harness.hpp/.cpp）
+│   ├── test_lexer.cpp / test_parser.cpp / test_semantic.cpp
+│   ├── test_ir.cpp / test_ir_codegen.cpp         # IR 模型与降级器
+│   ├── test_codegen.cpp / test_codegen_bridge.cpp / test_codegen_e2e.cpp
+│   ├── test_c_backend.cpp       # C 后端 emit 与 C/VM 差分
+│   ├── test_extern.cpp / test_multifile.cpp      # extern 声明（含 msvcrt 真宿主 e2e）/ 多文件
 │   ├── test_vm.cpp              # VM 执行级用例
 │   ├── test_instructions.cpp    # 指令编码断言（Assembler::parseLine）
-│   ├── test_assembler.cpp       # 汇编器基础用例
-│   ├── test_assembler_v21.cpp   # NCI v2.1 目标格式字节级用例
+│   ├── test_assembler.cpp / test_assembler_v21.cpp  # 汇编器与 v2.1 目标格式字节级用例
+│   ├── test_linker.cpp          # nas -r 链接器用例
 │   ├── test_loader.cpp          # v2.1 加载器/宿主分发/动态链接用例
+│   ├── test_hostlib.cpp         # --host-lib 宿主库用例
+│   ├── test_golden_e2e.cpp      # examples 全工具链黄金 e2e
 │   ├── test_integration_e2e.cpp # 汇编→加载→宿主调用全链路 e2e
+│   ├── test_diff_matrix.cpp     # R13 差分矩阵（程序 × 后端）
 │   └── test_libca.cpp           # libca smoke test
-├── examples/      # Sample .nc programs
+├── examples/      # Sample .nc programs（hello_project/ 为 xmake rule 样例工程）
 ├── test/          # Legacy test files (.nas, .nca)
-├── doc/           # 设计文档与规范（NCI v2.1 权威规范、开发计划、PRD）
+├── doc/           # 设计文档与规范（NCI v2.1 权威规范、PRD 多后端路线图、开发计划）
+├── .github/workflows/ci.yml  # CI：windows-latest + xmake 构建与回归
 ├── xmake.lua      # Build configuration（含 MSVC /utf-8 全局标志）
 ├── .clang-format  # Formatting (root=GNU for nvm/nas; ncc/tests/examples=K&R sub-configs)
 └── README.md
@@ -300,7 +317,25 @@ EXPECT_EQ(token.kind, expected);  // Log failure but continue
 
 - `test_main.cpp`: GTest and spdlog initialization
 - `test_*.cpp`: One per component under test
+- `tests/support/`: Shared harness for the differential matrix (`diff_harness.hpp/.cpp`)
 - Include source files directly in `xmake.lua` for test target (no separate compilation)
+
+### Differential Testing (R13 Matrix)
+
+- `test_diff_matrix.cpp` + `tests/support/diff_harness.hpp/.cpp` run a
+  **program set × backend matrix** (examples + feature cases × vm/c) asserting the
+  same program produces the same observable exit code on every available backend.
+- Mapping convention: VM main return = R0 (int32_t); the C backend's exit code is
+  compared as `& 0xFF`. Keep matrix-program `main` return values in `[0, 255]` so the
+  mapping stays injective (255-truncation boundary).
+- Anchor assertions: known programs additionally assert the raw VM R0, so the two
+  backends cannot be "consistently wrong".
+- **Skip policy**: backend availability is probed at runtime — the C compiler probe is
+  `NANOC_C_COMPILER` env var > `clang` on PATH > `gcc` on PATH; when fewer than 2
+  executable backends exist the row is `GTEST_SKIP` (marked skip, not failure). The
+  future LLVM column (R6) follows the same probe-and-skip pattern.
+- When adding a language feature, add its .nc case to the matrix (and to
+  `test_golden_e2e.cpp` anchors when applicable).
 
 ---
 
@@ -335,6 +370,12 @@ xmake
 ```bash
 xmake clean && xmake config && xmake build
 ```
+
+**git/GitHub 网络双栈**：直连与全局代理因网络环境切换互有可达性（同一条
+push/`gh`/`curl api.github.com` 这次直连通、下次可能只有代理通）。失败时
+**换栈重试即可**：直连失败挂代理（`export https_proxy=http://127.0.0.1:<代理端口>`，
+端口以本机代理软件为准），代理失败则 `unset https_proxy http_proxy` 重试；
+push 被中断重发是安全的。
 
 ---
 
