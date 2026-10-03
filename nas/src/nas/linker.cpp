@@ -320,6 +320,8 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
         codeBase += m.codeSize;
         dataBase += m.codeSize + m.dataSize;
     }
+    // 输出镜像代码段总长（CALLX→CALL 直调改写的合法性判据：目标须是代码地址）
+    const int32_t totalCodeSize = codeBase;
 
     // ---- 合并导出表：地址平移 + 重名报错 ----
     std::vector<LinkExport> mergedExports;
@@ -422,7 +424,13 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
                 if (kind == AddrKind::CALLX || kind == AddrKind::DATA) {
                     // 导入解析（按值唯一命中）：
                     //   已内部解析（addr=0 旧格式或 flags bit2 动态导入命中导出）
-                    //     → 改写为平移后内部目标地址；
+                    //     → 改写为平移后内部目标地址；CALLX 站点同时把 opcode
+                    //     改写为 CALL 直调（#54 根修）：CALL/CALLX 操作数编码
+                    //     同为 5 字节 IMM32，直调后 CALLX 只保留给宿主/动态
+                    //     导入站点，消除"addr=0 既可能是内部地址又可能是未解析
+                    //     动态导入"的编码歧义（落在地址 0 的导出函数由此可被
+                    //     正确调用）；目标为数据地址时保留 CALLX（调数据段在
+                    //     VM 侧走宿主查表报错，不应变成执行数据）；
                     //   未内部解析的动态导入 → 改写为该符号在输出导入表中的首现
                     //     伪地址（跨模块声明序差异归一，单模块为恒等变换）
                     int hits = 0;
@@ -436,6 +444,8 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
                         if (m.resolved[hit]) {
                             nv = exportAddr[m.imports[hit].name];
                             patched = true;
+                            if (kind == AddrKind::CALLX && nv < totalCodeSize)
+                                m.code[pc] = static_cast<uint8_t>(NOpcode::CALL);
                         }
                         else if (m.imports[hit].flags & IMPORT_FLAG_DYNAMIC) {
                             nv = mergedImports[importIndex.at(m.imports[hit].name)].addr;

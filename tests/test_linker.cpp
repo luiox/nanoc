@@ -55,8 +55,8 @@ static int32_t hostAdd(int32_t* regs, int8_t*, int32_t) { return regs[0] + regs[
 
 // ==== 字节级：header / 重定位 / 导出地址 ====
 
-// 两模块链接：已解析 callx 改写为平移后内部地址、导入移除、导出地址平移、
-// 代码顺序拼接、pad 字段保持
+// 两模块链接：已解析 callx 直调改写（opcode 0x61→0x60 + 平移后地址）、导入移除、
+// 导出地址平移、代码顺序拼接、pad 字段保持
 TEST(LinkerTest, TwoModulesHeaderCallxRewriteAndExportShift) {
     auto a = asmObj("extern bfunc\n"
                     "export main\n"
@@ -80,9 +80,10 @@ TEST(LinkerTest, TwoModulesHeaderCallxRewriteAndExportShift) {
     EXPECT_EQ(getI32(r.image, 24), 2);  // exportCount
     EXPECT_EQ(getI32(r.image, 28), 0);  // entryPoint = main
 
-    // 模块 1 代码原样前移：LMM 立即数不平移，callx imm 改写为 bfunc 平移后地址 12
+    // 模块 1 代码原样前移：LMM 立即数不平移，callx 直调改写（opcode 0x61→0x60，
+    // imm 改写为 bfunc 平移后地址 12）
     EXPECT_EQ(getI32(r.image, 32 + 2), 5);
-    EXPECT_EQ(r.image[32 + 6], 0x61);
+    EXPECT_EQ(r.image[32 + 6], 0x60);
     EXPECT_EQ(getI32(r.image, 32 + 7), 12);
     EXPECT_EQ(r.image[32 + 11], 0x62);
     // 模块 2 代码原样拼接在 codeBase = 12 处
@@ -388,10 +389,11 @@ TEST(LinkerTest, DynamicExternCrossModuleResolved) {
     LinkResult r = Linker::linkImages({ a, b });
     ASSERT_TRUE(r.ok) << r.errorMessage;
 
-    EXPECT_EQ(getI32(r.image, 20), 1);     // f 已解析移除，g 保留
-    EXPECT_EQ(r.image[32], 0x61);          // callx f
-    EXPECT_EQ(getI32(r.image, 32 + 1), 6); // 改写为 f 平移后内部地址（codeBase_B = 6）
-    EXPECT_EQ(r.image[32 + 6], 0x62);      // 模块 b 的 ret（codeBase = 6）
+    EXPECT_EQ(getI32(r.image, 20), 1); // f 已解析移除，g 保留
+    EXPECT_EQ(r.image[32], 0x60);      // callx f 直调改写为 CALL
+    EXPECT_EQ(getI32(r.image, 32 + 1),
+              6);                     // imm 改写为 f 平移后内部地址（codeBase_B = 6）
+    EXPECT_EQ(r.image[32 + 6], 0x62); // 模块 b 的 ret（codeBase = 6）
     // 保留的 g 导入 entry：伪宿主地址 0x7E000004（声明序第二）+ flags bit2
     const size_t importOff = 32 + getI32(r.image, 12) + getI32(r.image, 16);
     EXPECT_EQ(getI32(r.image, importOff), 1); // nameLen
@@ -573,7 +575,7 @@ TEST(LinkerTest, UnresolvedImportHostRegistrationExecution) {
     EXPECT_EQ(vm.getRegister(0), 42);
 }
 
-// 同一程序内 CALLX 双语义并存：内部地址（链接改写）按 CALL、宿主静态地址查表
+// 同一程序内 CALL 直调（链接器改写）与 CALLX 宿主调用（静态地址查表）并存
 TEST(LinkerTest, CallxMixedInternalAndHostExecution) {
     auto a = asmObj("extern bfunc\n"
                     "extern hostadd 0x7F000002\n"
@@ -596,8 +598,47 @@ TEST(LinkerTest, CallxMixedInternalAndHostExecution) {
     vm.registerHostFunction(0x7F000002, hostAdd);
     vm.start();
 
-    // callx bfunc → 内部（1+1=2）；callx hostadd → 宿主（2+10=12）
+    // callx bfunc → 链接器改写 CALL 直调（1+1=2）；callx hostadd → 宿主（2+10=12）
     EXPECT_EQ(vm.getRegister(0), 12);
+}
+
+// #54 回归：被调函数落在绝对地址 0（被调模块放链首位、导出函数在代码段起点）。
+// 旧实现把解析站点保留为 CALLX、依赖 VM 的 addr > 0 判定内部地址——地址 0 同时
+// 是未解析动态导入的哨兵值，会被拒跳（历史 workaround：入口模块强制放链首位）。
+// 根修后链接器把解析为内部符号的 CALLX 直接改写为 CALL，地址 0 可被正确调用，
+// 链接顺序不再承载语义
+TEST(LinkerTest, ResolvedCallxToAddressZeroDirectCall) {
+    auto callee = asmObj("export f\n"
+                         "f:\n"
+                         "    addi R0, 37\n"
+                         "    ret\n");
+    auto entry = asmObj("extern f\n"
+                        "export main\n"
+                        "main:\n"
+                        "    lmm R0, 5\n"
+                        "    callx f\n"
+                        "    ret\n");
+    LinkResult r = Linker::linkImages({ callee, entry }); // 被调模块在链首位
+    ASSERT_TRUE(r.ok) << r.errorMessage;
+
+    EXPECT_EQ(getI32(r.image, 12), 19); // codeSize = 7 + 12
+    EXPECT_EQ(getI32(r.image, 20), 0);  // f 导入已内部解析移除
+    EXPECT_EQ(getI32(r.image, 28), 7);  // entryPoint = main 平移后地址
+
+    // f 恰在地址 0：站点改写为 CALL 直调，imm = 0（旧实现此处为 0x61）。
+    // 入口模块代码在 image 偏移 32+7（被调模块 7 字节在前），callx 站点在模块内 +6
+    EXPECT_EQ(r.image[32 + 7 + 6], 0x60);
+    EXPECT_EQ(getI32(r.image, 32 + 7 + 7), 0);
+    // 被调模块代码在地址 0 原样保留
+    static const uint8_t fCode[] = { 0x11, 0x00, 0x25, 0x00, 0x00, 0x00, 0x62 };
+    EXPECT_EQ(memcmp(r.image.data() + 32, fCode, sizeof(fCode)), 0);
+
+    NVirtualMachine vm(64 * 1024);
+    writeAndLoad(vm, r.image, "test_linker_addr0.nci");
+    vm.start();
+
+    EXPECT_EQ(vm.getRegister(0), 42);         // CALL 0 进入 f，addi 生效
+    EXPECT_EQ(vm.getSP(), vm.getStackSize()); // 返回地址压栈被 ret 正常消费
 }
 
 // linkFiles 与 linkImages 结果一致（真实文件读取路径）
