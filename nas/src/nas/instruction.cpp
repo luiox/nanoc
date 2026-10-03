@@ -1620,8 +1620,23 @@ Assembler::assemble(const std::string & source)
             bool found = false;
             value = labelAddress(ins->pendingLabel, found);
             if (!found) {
-                fail(ins->sourceLine, "未定义的标号 '" + ins->pendingLabel + "'");
-                return result;
+                // 数据地址类指令回落导入表：允许 lea/loada/storea/st 引用 extern
+                // 符号（跨模块数据引用，imm = 导入地址，由链接器改写）。
+                // callx 仍仅走导入表，jmp/call 仍仅走本模块标号
+                const ImportRec * ext = nullptr;
+                if (ins->opcode == NOpcode::ST || ins->opcode == NOpcode::LEA
+                    || ins->opcode == NOpcode::LOADA || ins->opcode == NOpcode::STOREA) {
+                    for (const auto & i2 : imports)
+                        if (i2.name == ins->pendingLabel) {
+                            ext = &i2;
+                            break;
+                        }
+                }
+                if (!ext) {
+                    fail(ins->sourceLine, "未定义的标号 '" + ins->pendingLabel + "'");
+                    return result;
+                }
+                value = ext->address;
             }
         }
         if (ins->patchOffset < 0
