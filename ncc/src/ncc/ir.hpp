@@ -33,11 +33,14 @@
 // - R11 match（已落地）：lower 降解为比较+跳转链（If 链）；密集值的跳转表生成
 //   属后端优化，不在降解层做（PRD R11）。匹配主体/结果各占一个隐藏局部变量，
 //   分支体经结果变量回填——IR 中不存在独立 Match 节点。
-// - R12 coro/yield（预留）：IrFunction 增加 coro 标志（随 M6 引入）。状态机
-//   变换在 IR 层完成：局部变量提升到句柄结构体（IrStructDef）、yield 点切分
-//   state 编号、resume 展开为 switch 状态分发（PRD R12）。硬约束"yield 不得
-//   出现在 pending defer 作用域"在变换前检查，检测依据 = IrDeferScopeStmt
-//   （defer 展开时保留的结构化信息，见其注释）。
+// - R12 coro/yield（已落地）：lower 产出含 IrYieldStmt 的 coro 函数 IR
+//   （IrFunction::isCoro），文件尾的状态机变换随即降解（PRD R12，决策 A2）：
+//   每个 coro 函数变换为「(int __coro_h) 签名的状态机函数」（名字/functions
+//   槽位不变），帧 = 每 coro 函数一个 __coro_frame_<name> struct + 全局帧数
+//   组/槽计数器；句柄分发给注入的 __coro_resume/__coro_done。变换产物只用
+//   既有 IR 构造（If 链/While/Return/struct 成员/数组下标），三后端零改动。
+//   硬约束"yield 不得出现在 pending defer 作用域"由语义层裁决（m_deferDepth），
+//   变换前对 IrDeferScopeStmt 子树内的 Yield 再做防御性检查。
 //
 // libca：作用域表用 ca::collection::HashMap（与 SemanticAnalyzer::Scope 一致），
 // 有序集合用 std::vector（与 ast.hpp 一致）；契约错误走 ca::Result。
@@ -256,7 +259,9 @@ namespace ir {
             // If 链），后端只见既有 Kind；带 defer 注册记录的作用域用
             // IrDeferScopeStmt（Kind::Block 的子类）承载。若后续特性需要
             // 后端可见的新形态，再在此追加枚举值。
-            // Yield, // R12：协程 yield 点（状态机变换后，M6 引入）
+            Yield, // R12：协程 yield 点（PRD R12）。仅出现在 coro 函数的
+                   // lower 产物中，随即被状态机变换降解为 Store+Return——
+                   // 后端不消费本 Kind（见到即内部契约破坏）
         };
 
         Kind kind;
@@ -355,6 +360,16 @@ namespace ir {
         IrDeferScopeStmt(int l, int c) : IrBlockStmt(l, c) {}
     };
 
+    // R12 coro：yield 点（PRD R12）。lower 产出、状态机变换消费的中间形态：
+    // - 语义层保证仅出现在 coro 函数体内且不在 pending defer 作用域内；
+    // - 变换降解为「帧 __state 写恢复点 + return 产出值」（决策 A2 状态机），
+    //   变换后 IR 不再含本节点，后端零改动
+    struct IrYieldStmt : IrStmt {
+        std::unique_ptr<IrExpr> value; // 产出值（coro 返回类型一期限定 int）
+        IrYieldStmt(std::unique_ptr<IrExpr> v, int l, int c)
+          : IrStmt(Kind::Yield, l, c), value(std::move(v)) {}
+    };
+
     // ---------------------------------------------------------------------------
     // 模块级实体
     // ---------------------------------------------------------------------------
@@ -398,6 +413,11 @@ namespace ir {
         std::vector<IrParam> params;
         std::vector<IrLocal> locals; // 函数体内声明的局部变量（按声明顺序，含嵌套块）
         std::unique_ptr<IrBlockStmt> body;
+        // coro 函数标志（PRD R12）：lower 产物的 body 可能含 IrYieldStmt；
+        // 状态机变换后 body 只由既有语句形态组成，标志保留供 dump 识别。
+        // 变换会把签名改写为 (int __coro_h)（句柄 = 帧槽编码），名字与
+        // functions 槽位不变（LinkageTable 位置对齐约定，见 codegen.hpp）
+        bool isCoro = false;
     };
 
     // extern 声明（PRD R3）：宿主提供的 C 函数签名。不进入 functions（无函数

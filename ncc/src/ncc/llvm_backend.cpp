@@ -8,6 +8,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -581,6 +582,10 @@ namespace llvm_backend {
                 case ir::IrStmt::Kind::Break:
                 case ir::IrStmt::Kind::Continue:
                     break;
+                case ir::IrStmt::Kind::Yield:
+                    // R12 coro：状态机变换保证后端不见 yield 点（PRD R12）
+                    throw std::runtime_error(
+                      "internal error: yield statement reached the LLVM backend");
                 }
             }
 
@@ -1151,6 +1156,10 @@ namespace llvm_backend {
                     popScope();
                     break;
                 }
+                case ir::IrStmt::Kind::Yield:
+                    // R12 coro：状态机变换保证后端不见 yield 点（PRD R12）
+                    throw std::runtime_error(
+                      "internal error: yield statement reached the LLVM backend");
                 }
             }
 
