@@ -35,6 +35,35 @@ NCI（NanoC Intermediate）是 NanoC 虚拟机的二进制字节码格式。它�
  N  a  n  o  C  \0  [保留]
 ```
 
+### 2.1 段布局与符号表（钉死布局）
+
+文件按以下顺序线性排布，所有多字节字段为小端：
+
+```
+header(32B) | code(codeSize) | data(dataSize) | import table | export table
+```
+
+**数据段统一编址**：代码地址空间为 `[0, codeSize)`；数据标号地址 = `codeSize + 段内偏移`。VM 加载时将数据段放置在统一内存的 `codeSize` 偏移处（参考实现为栈缓冲低端），保证 `LEA` 取址结果与 `LOAD`/`STORE`/`LOADA`/`STOREA` 的绝对寻址落在同一地址空间。
+
+**导入表 entry**（重复 importCount 次）：
+
+| 偏移 | 大小 | 字段 |
+|------|------|------|
+| 0 | 4 | nameLen：符号名字节数（不含 NUL） |
+| 4 | nameLen | name：UTF-8 符号名 |
+| 4+nameLen | 1 | NUL 终止符 |
+| 动态 | 动态 | pad：补零至 4 字节对齐（以 entry 起始为基准） |
+| 动态 | 4 | addr：宿主地址；**0 = 留给动态链接** |
+| 动态 | 4 | flags：bit0-1 = 调用约定（0=fastcall，1=cdecl），其余位必须为 0 |
+
+**导出表 entry**（重复 exportCount 次）：与导入表同构——addr = 符号在代码段内的地址，flags 恒 0。
+
+**entryPoint 规则**：存在 `main` 标号则用之；否则取第一个导出符号的地址；否则 0。
+
+**调用约定**：汇编侧 `.calling_convention fastcall|cdecl` 顺序作用于其后声明的 `extern`（文件级顺序生效），写入对应导入 entry 的 flags。fastcall 前 4 个整型参数走 R0-R3；cdecl 参数压栈、由调用者清栈（`addi R4, N`）。约定仅是符号元数据，指令编码不受影响。
+
+**动态链接约定**：导入 entry `addr = 0` 表示符号地址由加载期解析（按符号名注册或经 `GetProcAddress`/`dlsym` 解析）。参考实现从 `0x7F000000`（`HOST_ADDRESS_BASE`）起为动态符号分配宿主地址并回填，宿主地址空间与代码/数据地址空间隔离。
+
 ---
 
 ## 3. 指令集（精简版）
@@ -204,13 +233,15 @@ export factorial
 factorial:
     enter 0
     ; R0 = n
-    
-    cmpl R0, 1
-    jg .recurse
-    lmm R0, 1
+    push R0
+    lmm R1, 1
+    cmp R0, R1
+    pop R0
+    jp .recurse      ; n > 1 → 递归
+    lmm R0, 1        ; n <= 1 → 返回 1
     leave
     ret
-    
+
 .recurse:
     push R0
     lmm R1, 1
@@ -218,7 +249,6 @@ factorial:
     call factorial
     pop R1
     mul R0, R1
-    
     leave
     ret
 ```
@@ -227,12 +257,14 @@ factorial:
 
 ## 6. 实现清单
 
-- [ ] 指令定义：LOAD, STORE, ENTER, LEAVE, CALLX, MOV, CLR
-- [ ] 指令分离：ADD/ADDI, SUB/SUBI, MUL/MULI 等
-- [ ] **彻底移除：TRAP, SYSCALL, 所有系统调用**
-- [ ] VM 执行：CALL/CALLX/RET, ENTER/LEAVE
-- [ ] NAS：`.calling_convention`, `extern`, `export`
-- [ ] 测试：C 互操作（printf, malloc, exit）
+- [x] 指令定义：LOAD, STORE, ENTER, LEAVE, CALLX, MOV, CLR（PR #31/#32）
+- [x] 指令分离：ADD/ADDI, SUB/SUBI, MUL/MULI 等（PR #32）
+- [x] **彻底移除：TRAP, SYSCALL, 所有系统调用**（v2.1 指令集无系统调用）
+- [x] VM 执行：CALL/CALLX/RET, ENTER/LEAVE（PR #31/#32）
+- [x] VM 加载：v2.1 文件头/导入导出表/数据段/宿主分发/动态链接（PR #33）
+- [x] NAS：`.calling_convention`, `extern`, `export`，数据段与完整 v2.1 目标文件（PR #34）
+- [x] 集成验收：汇编 → 加载 → 宿主调用 e2e（PR #35）
+- [ ] 测试：C 标准库互操作（printf, malloc, exit 经宿主函数）
 
 ---
 
