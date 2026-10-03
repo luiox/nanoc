@@ -151,8 +151,11 @@ Token Lexer::readString() {
                                      + std::to_string(startLine));
         }
         if (c == '\\' && m_pos + 1 < m_source.length()) {
+            // 反斜杠与被转义字符原样保留在 value 中（由汇编器/C 后端解码）；
+            // 先记反斜杠并前进，下一轮循环记被转义字符
             value += c;
             advance();
+            continue;
         }
         value += c;
         advance();
