@@ -255,3 +255,126 @@ TEST(CodegenTest, CharLiteral) {
 TEST(CodegenTest, ErrorHandling) {
     EXPECT_THROW({ compile("int main() { return x; }"); }, std::runtime_error);
 }
+
+// ---------------------------------------------------------------------------
+// R1.2 类型系统扩展（第一批）：字符串字面量 / 指针 / 一维数组
+// ---------------------------------------------------------------------------
+
+namespace {
+
+    // 统计子串出现次数（去重/重复断言用）
+    std::size_t countOf(const std::string& text, const std::string& needle) {
+        std::size_t count = 0;
+        for (std::size_t pos = text.find(needle); pos != std::string::npos;
+             pos = text.find(needle, pos + needle.size())) {
+            ++count;
+        }
+        return count;
+    }
+
+} // namespace
+
+// 字符串字面量落数据段：db 字节串 + 显式 NUL 终止；LEA 取地址
+TEST(CodegenTest, StringLiteralDataSegment) {
+    std::string assembly = compile("int main() { char* s = \"NanoC\"; return 0; }");
+
+    EXPECT_TRUE(assembly.find(".str0:") != std::string::npos);
+    EXPECT_TRUE(assembly.find("db \"NanoC\", 0") != std::string::npos);
+    EXPECT_TRUE(assembly.find("lea R0, .str0") != std::string::npos);
+}
+
+// 相同字面量去重：两个相同字符串只发一份数据
+TEST(CodegenTest, StringLiteralDeduplication) {
+    std::string assembly =
+      compile("int main() { char* s = \"NanoC\"; char* t = \"NanoC\"; return 0; }");
+
+    EXPECT_EQ(countOf(assembly, "db \"NanoC\", 0"), (std::size_t)1);
+    EXPECT_EQ(countOf(assembly, ".str0:"), (std::size_t)1);
+    EXPECT_TRUE(assembly.find(".str1") == std::string::npos);
+    EXPECT_EQ(countOf(assembly, "lea R0, .str0"), (std::size_t)2);
+}
+
+// 不同字面量各占一个标号
+TEST(CodegenTest, StringLiteralMultipleEntries) {
+    std::string assembly =
+      compile("int main() { char* s = \"abc\"; char* t = \"de\"; return 0; }");
+
+    EXPECT_TRUE(assembly.find("db \"abc\", 0") != std::string::npos);
+    EXPECT_TRUE(assembly.find("db \"de\", 0") != std::string::npos);
+    EXPECT_TRUE(assembly.find("lea R0, .str0") != std::string::npos);
+    EXPECT_TRUE(assembly.find("lea R0, .str1") != std::string::npos);
+}
+
+// 一维数组栈布局：enter 预留 10 槽，首元素置于块内最低地址槽，
+// 元素寻址 = 基址(BP - 4*(slot+size-1)) + 4*i（与指针运算 a[k]==*(a+k) 一致）
+TEST(CodegenTest, ArrayStackLayoutAndIndexing) {
+    std::string assembly = compile("int main() { int a[10]; a[0] = 1; return a[0]; }");
+
+    EXPECT_TRUE(assembly.find("enter 40") != std::string::npos);
+    // 基址：mov R0, R5 + subi R0, 40（a 占槽位 1..10，首元素在最低地址槽）
+    EXPECT_TRUE(assembly.find("mov R0, R5") != std::string::npos);
+    EXPECT_TRUE(assembly.find("subi R0, 40") != std::string::npos);
+    // 变址缩放：lmm R2, 4 + mul R1, R2；元素地址 = 基址 + 4*i
+    EXPECT_TRUE(assembly.find("lmm R2, 4") != std::string::npos);
+    EXPECT_TRUE(assembly.find("mul R1, R2") != std::string::npos);
+    EXPECT_TRUE(assembly.find("add R0, R1") != std::string::npos);
+    // 元素读写：地址进 R0/R6 后 LOAD/STORE
+    EXPECT_TRUE(assembly.find("load R0, [R0]") != std::string::npos);
+    EXPECT_TRUE(assembly.find("store [R6], R0") != std::string::npos);
+}
+
+// 全局数组：数据段按元素数排布 dd 0
+TEST(CodegenTest, GlobalArrayDataSegment) {
+    std::string assembly = compile("int g[4]; int main() { g[0] = 1; return g[0]; }");
+
+    EXPECT_TRUE(assembly.find(".g_g:") != std::string::npos);
+    EXPECT_EQ(countOf(assembly, "dd 0"), (std::size_t)4);
+    // 全局数组寻址：lea 基址 + add R0, R1（向上生长）
+    EXPECT_TRUE(assembly.find("lea R0, .g_g") != std::string::npos);
+    EXPECT_TRUE(assembly.find("add R0, R1") != std::string::npos);
+}
+
+// 指针寻址序列：&x 取地址入 R0、*p 解引用 load R0, [R0]、经指针写回
+TEST(CodegenTest, PointerAddressingSequence) {
+    std::string assembly =
+      compile("int main() { int x = 7; int* p = &x; *p = 9; return *p; }");
+
+    // &x：mov R0, R5 + subi R0, 4
+    EXPECT_TRUE(assembly.find("subi R0, 4") != std::string::npos);
+    // *p 读写：load R0, [R0]
+    EXPECT_TRUE(assembly.find("load R0, [R0]") != std::string::npos);
+    EXPECT_TRUE(assembly.find("store [R6], R0") != std::string::npos);
+}
+
+// 指针算术按 4 字节缩放：p+2 / 1+p / p-1 三种形态
+TEST(CodegenTest, PointerArithmeticScaling) {
+    std::string assembly = compile(
+      "int main() { int a[5]; int* p = a; p = p + 2; p = 1 + p; p = p - 1; return 0; }");
+
+    EXPECT_EQ(countOf(assembly, "lmm R2, 4"), (std::size_t)3);
+    EXPECT_EQ(countOf(assembly, "mul R1, R2"), (std::size_t)2); // p+2、p-1 缩放右操作数
+    EXPECT_EQ(countOf(assembly, "mul R0, R2"), (std::size_t)1); // 1+p 缩放左操作数
+    EXPECT_TRUE(assembly.find("add R0, R1") != std::string::npos);
+    EXPECT_TRUE(assembly.find("sub R0, R1") != std::string::npos);
+}
+
+// NULL 常量载入 0
+TEST(CodegenTest, NullLiteral) {
+    std::string assembly = compile("int main() { int* p = NULL; return p == NULL; }");
+
+    EXPECT_TRUE(assembly.find("lmm R0, 0") != std::string::npos);
+    EXPECT_TRUE(assembly.find("cmp R0, R1") != std::string::npos);
+}
+
+// 数组名退化：传参传首元素地址而非内容
+TEST(CodegenTest, ArrayDecayOnArgumentPassing) {
+    std::string assembly = compile("int sum(int* a, int n) { return a[0]; }\n"
+                                   "int main() { int a[3]; return sum(a, 3); }");
+
+    EXPECT_TRUE(assembly.find("call sum") != std::string::npos);
+    // 实参 a：mov R0, R5 + subi R0, 12 + push R0（首元素在最低地址槽，a 占槽 1..3）
+    EXPECT_TRUE(assembly.find("mov R0, R5") != std::string::npos);
+    EXPECT_TRUE(assembly.find("subi R0, 12") != std::string::npos);
+    // 形参 a[i]：指针经槽位载入后再变址
+    EXPECT_TRUE(assembly.find("load R0, [R6]") != std::string::npos);
+}

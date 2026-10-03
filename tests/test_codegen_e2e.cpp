@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <sstream>
 #include <string>
 
 // 最小 e2e：.nc 源码 → Lexer/Parser/CodeGenerator → 汇编文本 → Assembler::assemble
@@ -14,8 +15,16 @@
 
 namespace {
 
-    // 全链路执行：返回 main 的 R0 返回值
-    int32_t runProgram(const std::string& source, const std::string& nciPath) {
+    // 宿主函数固定地址（extern 指令内联回填，参照 test_integration_e2e）
+    constexpr int32_t kHostStrlenAddr = 0x7F000002;
+
+    // 全链路执行：返回 main 的 R0 返回值；hostName/hostFn 提供时把
+    // `extern <name>` 回填为显式地址并注册宿主函数（VM 的按名解析不回填
+    // callx 立即数，addr=0 导入无法在运行期命中宿主）
+    int32_t runProgram(const std::string& source,
+                       const std::string& nciPath,
+                       const std::string& hostName = "",
+                       NHostFunction hostFn = nullptr) {
         Lexer lexer(source);
         std::vector<Token> tokens = lexer.tokenize();
         Parser parser(tokens);
@@ -23,6 +32,17 @@ namespace {
 
         CodeGenerator codegen;
         std::string assembly = codegen.generate(*program);
+        if (hostFn != nullptr) {
+            std::ostringstream pinned;
+            pinned << "extern " << hostName << " 0x" << std::hex << kHostStrlenAddr
+                   << "\n";
+            const std::string bare = "extern " + hostName + "\n";
+            const std::size_t pos = assembly.find(bare);
+            EXPECT_NE(pos, std::string::npos) << "extern line not found:\n" << assembly;
+            if (pos != std::string::npos) {
+                assembly.replace(pos, bare.size(), pinned.str());
+            }
+        }
 
         AssemblyResult result = Assembler::assemble(assembly);
         EXPECT_TRUE(result.ok) << "line " << result.errorLine << ": "
@@ -36,8 +56,21 @@ namespace {
 
         NVirtualMachine vm(8 * 1024 * 1024);
         vm.load(nciPath);
+        if (hostFn != nullptr) {
+            vm.registerHostFunction(kHostStrlenAddr, hostFn);
+        }
         vm.start();
         return vm.getRegister(0);
+    }
+
+    // 宿主 strlen 桩：从 VM 统一内存按字节读 C 字符串取长度
+    int32_t hostStrlen(int32_t* regs, int8_t* mem, int32_t memSize) {
+        int32_t addr = regs[0];
+        int32_t n = 0;
+        while (addr + n < memSize && mem[addr + n] != 0) {
+            ++n;
+        }
+        return n;
     }
 
 } // namespace
@@ -89,4 +122,107 @@ TEST(CodegenE2ETest, GlobalInitAndCompositeCondition) {
                          "}";
     EXPECT_EQ(runProgram(source, "codegen_e2e_globals.nci"), 42);
     std::remove("codegen_e2e_globals.nci");
+}
+
+// ---------------------------------------------------------------------------
+// R1.2 类型系统扩展（第一批）：数组 / 指针 / 字符串字面量
+// ---------------------------------------------------------------------------
+
+// 一维数组：求和（传参退化）+ 原地逆序（下标读写），1+2+3+4+5=15，
+// 逆序后 a[0]=5、a[4]=1 → 15 + 5*10 + 1 = 66
+TEST(CodegenE2ETest, ArraySumAndReverse) {
+    std::string source = "int sum(int* a, int n) {\n"
+                         "    int s = 0;\n"
+                         "    for (int i = 0; i < n; i = i + 1) {\n"
+                         "        s = s + a[i];\n"
+                         "    }\n"
+                         "    return s;\n"
+                         "}\n"
+                         "int reverse(int* a, int n) {\n"
+                         "    int i = 0;\n"
+                         "    int j = n - 1;\n"
+                         "    while (i < j) {\n"
+                         "        int t = a[i];\n"
+                         "        a[i] = a[j];\n"
+                         "        a[j] = t;\n"
+                         "        i = i + 1;\n"
+                         "        j = j - 1;\n"
+                         "    }\n"
+                         "    return 0;\n"
+                         "}\n"
+                         "int main() {\n"
+                         "    int a[5];\n"
+                         "    a[0] = 1;\n"
+                         "    a[1] = 2;\n"
+                         "    a[2] = 3;\n"
+                         "    a[3] = 4;\n"
+                         "    a[4] = 5;\n"
+                         "    int total = sum(a, 5);\n"
+                         "    reverse(a, 5);\n"
+                         "    total = total + a[0] * 10;\n"
+                         "    return total + a[4];\n"
+                         "}";
+    EXPECT_EQ(runProgram(source, "codegen_e2e_array.nci"), 66);
+    std::remove("codegen_e2e_array.nci");
+}
+
+// 指针：取址、解引用读写、经形参指针交换调用者变量（3,7 → 7,3）
+TEST(CodegenE2ETest, PointerSwapThroughDereference) {
+    std::string source = "void swap(int* x, int* y) {\n"
+                         "    int t = *x;\n"
+                         "    *x = *y;\n"
+                         "    *y = t;\n"
+                         "}\n"
+                         "int main() {\n"
+                         "    int a = 3;\n"
+                         "    int b = 7;\n"
+                         "    swap(&a, &b);\n"
+                         "    return a * 10 + b;\n"
+                         "}";
+    EXPECT_EQ(runProgram(source, "codegen_e2e_ptrswap.nci"), 73);
+    std::remove("codegen_e2e_ptrswap.nci");
+}
+
+// 指针遍历数组：p = a 后经 p[i] 累加，等价 a[i]
+TEST(CodegenE2ETest, PointerWalksArray) {
+    std::string source = "int main() {\n"
+                         "    int a[4];\n"
+                         "    int i = 0;\n"
+                         "    while (i < 4) {\n"
+                         "        a[i] = i + 1;\n"
+                         "        i = i + 1;\n"
+                         "    }\n"
+                         "    int* p = a;\n"
+                         "    int s = 0;\n"
+                         "    for (int k = 0; k < 4; k = k + 1) {\n"
+                         "        s = s + p[k];\n"
+                         "    }\n"
+                         "    return s + (p > 0);\n"
+                         "}";
+    EXPECT_EQ(runProgram(source, "codegen_e2e_ptrwalk.nci"), 11);
+    std::remove("codegen_e2e_ptrwalk.nci");
+}
+
+// char 数组按 4 字节槽读写元素（'A'=65、'B'=66）
+TEST(CodegenE2ETest, CharArrayElementReadWrite) {
+    std::string source = "int main() {\n"
+                         "    char buf[4];\n"
+                         "    buf[0] = 'A';\n"
+                         "    buf[1] = 'B';\n"
+                         "    buf[2] = buf[0] + 1;\n"
+                         "    return buf[0] + buf[1] + buf[2];\n"
+                         "}";
+    EXPECT_EQ(runProgram(source, "codegen_e2e_chararray.nci"), 65 + 66 + 66);
+    std::remove("codegen_e2e_chararray.nci");
+}
+
+// 字符串字面量落数据段，指针传给宿主 strlen 桩，按字节读长度
+TEST(CodegenE2ETest, StringLiteralToHostStrlen) {
+    std::string source = "int main() {\n"
+                         "    char* s = \"NanoC\";\n"
+                         "    char* empty = \"\";\n"
+                         "    return strlen(s) * 10 + strlen(empty);\n"
+                         "}";
+    EXPECT_EQ(runProgram(source, "codegen_e2e_strlen.nci", "strlen", hostStrlen), 50);
+    std::remove("codegen_e2e_strlen.nci");
 }
