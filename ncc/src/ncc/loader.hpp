@@ -12,7 +12,6 @@
 #include <map>
 #include <memory>
 #include <set>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -214,13 +213,8 @@ private:
 
         // 环形 import：目标在 DFS 活动栈中 → 报错含完整链
         if (m_inStack.find(canonical) != m_inStack.end()) {
-            std::string chainText;
-            for (const std::string& node : chain) {
-                chainText += node + " -> ";
-            }
-            chainText += display;
             result.diagnostics.push_back(
-              makeError(locator, "circular import: " + chainText));
+              makeError(locator, "circular import: " + importChainText(chain, display)));
             return false;
         }
         // 重复 import 幂等：已完成装载的文件跳过（声明已在首次 import 处拼接）
@@ -228,16 +222,13 @@ private:
             return true;
         }
 
-        // 读文件
+        // 读文件（存在性检查；正文由预处理器读取）
         std::ifstream in(path, std::ios::binary);
         if (!in) {
             result.diagnostics.push_back(
               makeError(locator, "cannot open input file '" + display + "'"));
             return false;
         }
-        std::ostringstream buf;
-        buf << in.rdbuf();
-        const std::string source = buf.str();
 
         // R9 行级预处理（include C 头文件·声明子集）：#include "x.h" 引号形式
         // 递归展开（头文件段 DFS 首现序，先于本文件段产出）、guard/#pragma
@@ -256,22 +247,7 @@ private:
         std::vector<std::unique_ptr<Decl>> fileDecls;
         for (const PrepFile& prep : prepFiles) {
             std::unique_ptr<Program> piece;
-            try {
-                Lexer lexer(prep.text);
-                const std::vector<Token> tokens = lexer.tokenize();
-                Parser parser(tokens, prep.display, m_typedefNames);
-                if (prep.isHeader) {
-                    parser.setHeaderMode(true);
-                }
-                piece = parser.parse();
-            } catch (const ParseError& e) {
-                result.diagnostics.push_back(
-                  makeError({ e.file, e.line, e.column }, e.message));
-                return false;
-            } catch (const std::exception& e) {
-                result.diagnostics.push_back(
-                  makeError({ prep.display, 1, 1 },
-                            std::string("cannot parse file: ") + e.what()));
+            if (!parsePrepPiece(prep, piece, result.diagnostics)) {
                 return false;
             }
             if (prep.isHeader) {
@@ -345,13 +321,8 @@ private:
 
         // 环形 import 与整体编译同口径报错（含完整链）
         if (m_inStack.find(canonical) != m_inStack.end()) {
-            std::string chainText;
-            for (const std::string& node : chain) {
-                chainText += node + " -> ";
-            }
-            chainText += display;
             result.diagnostics.push_back(
-              makeError(locator, "circular import: " + chainText));
+              makeError(locator, "circular import: " + importChainText(chain, display)));
             return false;
         }
         // 重复 import 幂等：签名已在首次 import 处收集
@@ -359,16 +330,13 @@ private:
             return true;
         }
 
-        // 读文件
+        // 读文件（存在性检查；正文由预处理器读取）
         std::ifstream in(path, std::ios::binary);
         if (!in) {
             result.diagnostics.push_back(
               makeError(locator, "cannot open input file '" + display + "'"));
             return false;
         }
-        std::ostringstream buf;
-        buf << in.rdbuf();
-        const std::string source = buf.str();
 
         // R9 行级预处理（与 loadUnit 同口径）：头文件段并入本模块编译单元
         std::vector<PrepFile> prepFiles;
@@ -381,22 +349,7 @@ private:
         auto fileProgram = std::make_unique<Program>(1, 1);
         for (const PrepFile& prep : prepFiles) {
             std::unique_ptr<Program> piece;
-            try {
-                Lexer lexer(prep.text);
-                const std::vector<Token> tokens = lexer.tokenize();
-                Parser parser(tokens, prep.display, m_typedefNames);
-                if (prep.isHeader) {
-                    parser.setHeaderMode(true);
-                }
-                piece = parser.parse();
-            } catch (const ParseError& e) {
-                result.diagnostics.push_back(
-                  makeError({ e.file, e.line, e.column }, e.message));
-                return false;
-            } catch (const std::exception& e) {
-                result.diagnostics.push_back(
-                  makeError({ prep.display, 1, 1 },
-                            std::string("cannot parse file: ") + e.what()));
+            if (!parsePrepPiece(prep, piece, result.diagnostics)) {
                 return false;
             }
             if (prep.isHeader) {
@@ -589,18 +542,54 @@ private:
         return diagnostic;
     }
 
+    // import 链文本（环形诊断用）：链节点 + 当前文件
+    static std::string importChainText(const std::vector<std::string>& chain,
+                                       const std::string& display) {
+        std::string text;
+        for (const std::string& node : chain) {
+            text += node + " -> ";
+        }
+        text += display;
+        return text;
+    }
+
+    // 解析单个预处理段（头文件段由本函数按 prep.isHeader 置头文件模式）；
+    // 解析失败返回 false（诊断已追加），成功时 piece 携带该段 AST
+    bool parsePrepPiece(const PrepFile& prep,
+                        std::unique_ptr<Program>& piece,
+                        std::vector<Diagnostic>& diagnostics) {
+        try {
+            Lexer lexer(prep.text);
+            const std::vector<Token> tokens = lexer.tokenize();
+            Parser parser(tokens, prep.display, m_typedefNames);
+            if (prep.isHeader) {
+                parser.setHeaderMode(true);
+            }
+            piece = parser.parse();
+        } catch (const ParseError& e) {
+            diagnostics.push_back(makeError({ e.file, e.line, e.column }, e.message));
+            return false;
+        } catch (const std::exception& e) {
+            diagnostics.push_back(
+              makeError({ prep.display, 1, 1 },
+                        std::string("cannot parse file: ") + e.what()));
+            return false;
+        }
+        return true;
+    }
+
     // 规范路径（环形检测与幂等的键）：绝对路径 + 词法规范化 + 正斜杠
     static std::string canonicalOf(const std::filesystem::path& path) {
         return std::filesystem::absolute(path).lexically_normal().generic_string();
     }
 
     // 显示路径：优先相对入口目录（同目录工程呈现 a.nc -> b.nc -> a.nc），
-    // 无法相对化（跨盘/上级目录）时回退规范化绝对路径
+    // 无法相对化（lexically_relative 出错返回空路径，或含 .. 前缀）时回退
+    // 规范化绝对路径
     std::string displayOf(const std::filesystem::path& path) const {
         const std::filesystem::path normalized = path.lexically_normal();
-        std::error_code ec;
         const auto rel = normalized.lexically_relative(m_entryDir);
-        if (!ec && !rel.empty() && *rel.begin() != "..") {
+        if (!rel.empty() && *rel.begin() != "..") {
             return rel.generic_string();
         }
         return normalized.generic_string();

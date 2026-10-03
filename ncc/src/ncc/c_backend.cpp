@@ -441,7 +441,7 @@ namespace c_backend {
                 out << "#include <stddef.h>\n";
             }
 
-            void emitStructs(std::ostringstream& out) {
+            void emitStructs(std::ostringstream& out) const {
                 if (m_module.structs.empty()) {
                     return;
                 }
@@ -704,7 +704,9 @@ namespace c_backend {
                 case ir::IrStmt::Kind::While: {
                     const auto& whileStmt = static_cast<const ir::IrWhileStmt&>(stmt);
                     out << pad << "while (" << emitExpr(*whileStmt.condition) << ") {\n";
-                    emitBranchBody(out, indent, *whileStmt.body);
+                    if (whileStmt.body) {
+                        emitBranchBody(out, indent, *whileStmt.body);
+                    }
                     out << pad << "}\n";
                     break;
                 }
@@ -718,7 +720,9 @@ namespace c_backend {
                         << "; "
                         << (forStmt.step ? emitExpr(*forStmt.step) : std::string())
                         << ") {\n";
-                    emitBranchBody(out, indent, *forStmt.body);
+                    if (forStmt.body) {
+                        emitBranchBody(out, indent, *forStmt.body);
+                    }
                     out << pad << "}\n";
                     break;
                 }

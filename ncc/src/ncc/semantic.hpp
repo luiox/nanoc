@@ -264,6 +264,12 @@ private:
     void checkGlobalVariable(const VarDeclaration& decl);
     void checkFunctionBody(const FuncDeclaration& decl);
     void checkLocalVariable(const StmtVarDeclaration& decl);
+    // 变量声明类型的可用性检查（全局/局部共用）：void 类型与 incomplete
+    // struct 值（含数组元素）报错，诊断落在声明位置
+    void checkDeclValueType(const SemanticType& declared,
+                            const std::string& declName,
+                            int line,
+                            int column);
 
     // ---- 语句/表达式检查 ----
     void checkStmt(const Stmt& stmt);
