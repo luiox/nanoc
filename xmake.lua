@@ -52,6 +52,7 @@ target("tests")
     add_files("nas/src/nas/linker.cpp")
     add_files("ncc/src/ncc/lexer.cpp")
     add_files("ncc/src/ncc/parser.cpp")
+    add_files("ncc/src/ncc/preprocessor.cpp")
     add_files("ncc/src/ncc/codegen.cpp")
     add_files("ncc/src/ncc/ast.cpp")
     add_files("ncc/src/ncc/semantic.cpp")
@@ -139,4 +140,3 @@ target("compile_examples")
 --    add_ldflags("-L/usr/local/lib", "-lpthread", {force = true})
 --
 -- @endcode
-
