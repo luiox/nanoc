@@ -4,6 +4,7 @@
 #include "ncc/ast.hpp"
 #include "ncc/lexer.hpp"
 #include "ncc/parser.hpp"
+#include "ncc/preprocessor.hpp"
 #include "ncc/semantic.hpp"
 
 #include <filesystem>
@@ -100,6 +101,16 @@ struct StandaloneResult {
 // a.nc -> b.nc -> a.nc）；无法相对化时回退规范化绝对路径。
 // 已知限制（一期不做）：路径大小写不敏感的文件系统上，仅大小写不同的
 // 两种拼写不视为同一文件（环形检测与幂等以字符串相等为准）。
+//
+// include C 头文件（PRD R9）：每个文件先经 Preprocessor 行级预处理——
+// `#include "rel/path.h"`（引号形式、相对当前文件）递归展开，头文件段在
+// 合并单元中先于包含者声明（首次 include 处，DFS 首现序）；头文件以规范
+// 绝对路径 memo，重复/循环 include 幂等跳过（头文件声明每单元只拼接一次，
+// 跨 .nc 共享同一份——struct/typedef/原型不因多处 include 重复登记）。
+// 头文件声明的 sourceFile 置空 = 全编译单元可见（与 R7 合成声明同口径，
+// C 翻译单元语义）；头文件解析进 Parser 头文件模式（R9 声明子集：函数
+// 原型、限定符/修饰符链、(void) 空参表、数组形参退化）。头文件进依赖
+// 清单 loadOrder（-MMD 增量追踪）。
 class Loader {
 public:
     // entryFiles：一个或多个入口 .nc 文件（对应命令行多个输入，逐个作为
@@ -228,28 +239,64 @@ private:
         buf << in.rdbuf();
         const std::string source = buf.str();
 
-        // 解析（解析错误 → 结构化诊断，带文件与行列）
-        std::unique_ptr<Program> fileProgram;
-        try {
-            Lexer lexer(source);
-            const std::vector<Token> tokens = lexer.tokenize();
-            Parser parser(tokens, display);
-            fileProgram = parser.parse();
-        } catch (const ParseError& e) {
-            result.diagnostics.push_back(
-              makeError({ e.file, e.line, e.column }, e.message));
+        // R9 行级预处理（include C 头文件·声明子集）：#include "x.h" 引号形式
+        // 递归展开（头文件段 DFS 首现序，先于本文件段产出）、guard/#pragma
+        // once 识别、对象宏/enum 常量、不支持指令报错。预处理诊断与装载诊断
+        // 同格式
+        std::vector<PrepFile> prepFiles;
+        if (!m_preprocessor
+               .process(path, canonical, display, false, prepFiles, result.diagnostics)) {
             return false;
-        } catch (const std::exception& e) {
-            result.diagnostics.push_back(
-              makeError(locator, std::string("cannot parse file: ") + e.what()));
-            return false;
+        }
+
+        // 逐段解析：头文件段进头文件模式（R9 声明子集），其声明 sourceFile
+        // 置空 = 全编译单元可见（与 R7 合成声明同口径，C 的单元级可见语义）；
+        // .nc 段沿用既有规则（sourceFile = 显示路径）
+        std::vector<ImportDirective> fileImports;
+        std::vector<std::unique_ptr<Decl>> fileDecls;
+        for (const PrepFile& prep : prepFiles) {
+            std::unique_ptr<Program> piece;
+            try {
+                Lexer lexer(prep.text);
+                const std::vector<Token> tokens = lexer.tokenize();
+                Parser parser(tokens, prep.display, m_typedefNames);
+                if (prep.isHeader) {
+                    parser.setHeaderMode(true);
+                }
+                piece = parser.parse();
+            } catch (const ParseError& e) {
+                result.diagnostics.push_back(
+                  makeError({ e.file, e.line, e.column }, e.message));
+                return false;
+            } catch (const std::exception& e) {
+                result.diagnostics.push_back(
+                  makeError({ prep.display, 1, 1 },
+                            std::string("cannot parse file: ") + e.what()));
+                return false;
+            }
+            if (prep.isHeader) {
+                // 头文件进依赖清单（-MMD 增量构建追踪头文件变更）
+                m_order.push_back(prep.display);
+            } else {
+                fileImports = std::move(piece->imports);
+            }
+            for (auto& decl : piece->declarations) {
+                if (decl->type == ASTNodeType::TYPEDEF_DECLARATION) {
+                    // 单元级 typedef 名线程（PRD R9）：后续文件/段的 Parser
+                    // 据此把头文件别名按类型名解析
+                    m_typedefNames.insert(
+                      static_cast<const TypedefDeclaration&>(*decl).alias);
+                }
+                decl->sourceFile = prep.isHeader ? std::string() : display;
+                fileDecls.push_back(std::move(decl));
+            }
         }
 
         // 入栈 → 先递归装载全部 import（import 语法上位于文件顶部，
         // 递归序与文本顺序一致）→ 弹栈 → 拼接本文件声明
         chain.push_back(display);
         m_inStack.insert(canonical);
-        for (const ImportDirective& directive : fileProgram->imports) {
+        for (const ImportDirective& directive : fileImports) {
             const auto resolved = resolveImport(directive, path);
             if (!resolved.first) {
                 result.diagnostics.push_back(
@@ -272,8 +319,7 @@ private:
 
         m_loaded.insert(canonical);
         m_order.push_back(display);
-        for (auto& decl : fileProgram->declarations) {
-            decl->sourceFile = display;
+        for (auto& decl : fileDecls) {
             m_mergedDecls.push_back(std::move(decl));
         }
         return true;
@@ -313,7 +359,7 @@ private:
             return true;
         }
 
-        // 读文件 + 解析（与 loadUnit 同错误策略）
+        // 读文件
         std::ifstream in(path, std::ios::binary);
         if (!in) {
             result.diagnostics.push_back(
@@ -324,20 +370,50 @@ private:
         buf << in.rdbuf();
         const std::string source = buf.str();
 
-        std::unique_ptr<Program> fileProgram;
-        try {
-            Lexer lexer(source);
-            const std::vector<Token> tokens = lexer.tokenize();
-            Parser parser(tokens, display);
-            fileProgram = parser.parse();
-        } catch (const ParseError& e) {
-            result.diagnostics.push_back(
-              makeError({ e.file, e.line, e.column }, e.message));
+        // R9 行级预处理（与 loadUnit 同口径）：头文件段并入本模块编译单元
+        std::vector<PrepFile> prepFiles;
+        if (!m_preprocessor
+               .process(path, canonical, display, false, prepFiles, result.diagnostics)) {
             return false;
-        } catch (const std::exception& e) {
-            result.diagnostics.push_back(
-              makeError(locator, std::string("cannot parse file: ") + e.what()));
-            return false;
+        }
+
+        // 逐段解析（与 loadUnit 同策略：头文件头文件模式 + sourceFile 置空）
+        auto fileProgram = std::make_unique<Program>(1, 1);
+        for (const PrepFile& prep : prepFiles) {
+            std::unique_ptr<Program> piece;
+            try {
+                Lexer lexer(prep.text);
+                const std::vector<Token> tokens = lexer.tokenize();
+                Parser parser(tokens, prep.display, m_typedefNames);
+                if (prep.isHeader) {
+                    parser.setHeaderMode(true);
+                }
+                piece = parser.parse();
+            } catch (const ParseError& e) {
+                result.diagnostics.push_back(
+                  makeError({ e.file, e.line, e.column }, e.message));
+                return false;
+            } catch (const std::exception& e) {
+                result.diagnostics.push_back(
+                  makeError({ prep.display, 1, 1 },
+                            std::string("cannot parse file: ") + e.what()));
+                return false;
+            }
+            if (prep.isHeader) {
+                m_order.push_back(prep.display);
+            } else {
+                fileProgram->imports = std::move(piece->imports);
+            }
+            for (auto& decl : piece->declarations) {
+                if (decl->type == ASTNodeType::TYPEDEF_DECLARATION) {
+                    m_typedefNames.insert(
+                      static_cast<const TypedefDeclaration&>(*decl).alias);
+                }
+                // 轻装载保持既有口径：声明 sourceFile 恒置空（独立编译的可见
+                // 性 = 单文件模式，含 R9 头文件段与合成注入声明的互见规则）
+                decl->sourceFile = std::string();
+                fileProgram->declarations.push_back(std::move(decl));
+            }
         }
 
         chain.push_back(display);
@@ -532,10 +608,17 @@ private:
 
     std::vector<std::string> m_entryFiles;
     std::filesystem::path m_entryDir;
-    std::set<std::string> m_loaded;                   // 已完成装载的规范路径（幂等 memo）
-    std::set<std::string> m_inStack;                  // DFS 活动栈（环形检测）
-    std::vector<std::string> m_order;                 // 装载完成顺序（依赖清单）
+    std::set<std::string> m_loaded;   // 已完成装载的规范路径（幂等 memo）
+    std::set<std::string> m_inStack;  // DFS 活动栈（环形检测）
+    std::vector<std::string> m_order; // 装载完成顺序（依赖清单，含头文件）
     std::vector<std::unique_ptr<Decl>> m_mergedDecls; // 合并声明流（DFS 先序）
+
+    // ---- R9 include C 头文件 ----
+    // 单元级预处理器：常量表（对象宏/enum 常量/固定宽度预置）与已处理头
+    // 文件集跨文件共享——头文件每编译单元只展开一次（重复/循环 include
+    // 幂等跳过），typedef 别名线程给后续文件的 Parser
+    Preprocessor m_preprocessor;
+    std::set<std::string> m_typedefNames;
 
     // ---- 独立编译轻装载状态（PRD R7，与 load() 的 memo 共享 m_order/m_inStack）----
     std::set<std::string> m_lightLoaded;     // 轻装载完成 memo（规范路径）
