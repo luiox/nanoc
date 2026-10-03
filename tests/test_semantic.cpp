@@ -1092,6 +1092,7 @@ struct Point make(int x, int y) {
 int pairSum(Pair p) {
     return p.w + p.h;
 }
+NodeT gnode;
 int main() {
     struct Point p = make(2, 3);
     PointT q = p;
@@ -1132,9 +1133,9 @@ int main() {
     ASSERT_TRUE(make != nullptr);
     EXPECT_EQ(make->type, "struct Point");
 
-    const SymbolSummary* n = findGlobal(result, "n");
-    ASSERT_TRUE(n != nullptr);
-    EXPECT_EQ(n->type, "struct Node");
+    const SymbolSummary* gnode = findGlobal(result, "gnode");
+    ASSERT_TRUE(gnode != nullptr);
+    EXPECT_EQ(gnode->type, "struct Node");
 }
 
 // 负例：未知成员（诊断落在 `.` 运算符位置）
@@ -1148,7 +1149,7 @@ int main() {
 )";
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(result,
-                      { "test.nc:4:16: error: struct 'Point' has no member named 'z'" });
+                      { "test.nc:4:14: error: struct 'Point' has no member named 'z'" });
 }
 
 // 负例：标量取成员
@@ -1161,7 +1162,7 @@ TEST(SemanticTest, NegativeMemberOnScalar) {
 )";
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(result,
-                      { "test.nc:3:15: error: member access on non-struct type 'int'" });
+                      { "test.nc:3:13: error: member access on non-struct type 'int'" });
 }
 
 // 负例：struct 指针用 dot（应使用 ->）
@@ -1176,7 +1177,7 @@ int main() {
 )";
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(result,
-                      { "test.nc:5:15: error: member access through pointer type "
+                      { "test.nc:5:13: error: member access through pointer type "
                         "'struct Point*'; use '->'" });
 }
 
@@ -1191,7 +1192,7 @@ TEST(SemanticTest, NegativeArrowOnNonPointer) {
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(
       result,
-      { "test.nc:3:15: error: '->' requires a pointer to struct, but operand has "
+      { "test.nc:3:13: error: '->' requires a pointer to struct, but operand has "
         "type 'int'" });
 }
 
@@ -1206,7 +1207,7 @@ TEST(SemanticTest, NegativeArrowOnNonStructPointer) {
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(
       result,
-      { "test.nc:3:15: error: '->' requires a pointer to struct, but operand has "
+      { "test.nc:3:13: error: '->' requires a pointer to struct, but operand has "
         "type 'int*'" });
 }
 
@@ -1221,7 +1222,7 @@ int main() {
 )";
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(result,
-                      { "test.nc:4:16: error: invalid operands to binary '+'" });
+                      { "test.nc:4:15: error: invalid operands to binary '+'" });
 }
 
 // 负例：不同 struct 之间赋值
@@ -1321,16 +1322,22 @@ int main() {
     expectDiagnostics(result, { "test.nc:3:5: error: unknown type 'struct T'" });
 }
 
-// 负例：struct 标签缺 struct 前缀直接作类型名
-TEST(SemanticTest, NegativeTagWithoutStructPrefix) {
-    std::string source = R"(struct Point { int x; int y; };
+// 负例：struct 实参传给不兼容的 struct 形参（诊断落在调用点）
+TEST(SemanticTest, NegativeStructArgumentMismatch) {
+    std::string source = R"(struct A { int x; };
+struct B { int y; };
+int f(struct A a) {
+    return a.x;
+}
 int main() {
-    Point p;
-    return 0;
+    struct B b;
+    return f(b);
 }
 )";
     SemanticResult result = analyzeSource(source);
-    expectDiagnostics(result, { "test.nc:3:5: error: unknown type 'Point'" });
+    expectDiagnostics(result,
+                      { "test.nc:8:13: error: cannot convert 'struct B' to "
+                        "'struct A' in argument 1 of call to 'f'" });
 }
 
 // 负例：初始化器长度不符
@@ -1357,7 +1364,7 @@ int main() {
 )";
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(result,
-                      { "test.nc:3:25: error: cannot convert 'char*' to 'int' in "
+                      { "test.nc:3:26: error: cannot convert 'char*' to 'int' in "
                         "initialization of field 'y' of 'p'" });
 }
 
@@ -1417,7 +1424,7 @@ int main() {
 )";
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(result,
-                      { "test.nc:4:15: error: member access into incomplete type "
+                      { "test.nc:4:13: error: member access into incomplete type "
                         "'struct Fwd'" });
 }
 
@@ -1460,7 +1467,7 @@ int main() {
 )";
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(result,
-                      { "test.nc:4:10: error: struct value used as condition "
+                      { "test.nc:4:9: error: struct value used as condition "
                         "('struct Point')" });
 }
 
@@ -1476,7 +1483,7 @@ int main() {
 )";
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(result,
-                      { "test.nc:5:5: error: cannot assign to array member 'arr' "
+                      { "test.nc:5:6: error: cannot assign to array member 'arr' "
                         "(arrays are not copyable)" });
 }
 
@@ -1491,7 +1498,7 @@ int main() {
 )";
     SemanticResult result = analyzeSource(source);
     expectDiagnostics(result,
-                      { "test.nc:5:12: error: invalid operands to binary '=='" });
+                      { "test.nc:5:14: error: invalid operands to binary '=='" });
 }
 
 // 负例：匿名 struct 的内部标签不可直接引用

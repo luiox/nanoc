@@ -2,7 +2,48 @@
 #include <sstream>
 #include <stdexcept>
 
-Parser::Parser(const std::vector<Token>& tokens) : m_tokens(tokens), m_pos(0) {}
+Parser::Parser(const std::vector<Token>& tokens) : m_tokens(tokens), m_pos(0) {
+    // 预扫描 typedef 别名（文件作用域）。语句/声明按首 token 分发，需要先于
+    // 解析知道哪些标识符是类型别名。别名恒为 `typedef ... <ident> ;` 中
+    // 分号前最后一个标识符；花括号内的 struct 成员名不计（按深度屏蔽），
+    // 因此 `typedef struct { int w; } Pair;` 正确收集 Pair 而非 w
+    for (size_t i = 0; i < m_tokens.size(); ++i) {
+        if (m_tokens[i].kind != NTokenKind::KEYWORD_TYPEDEF) {
+            continue;
+        }
+        int depth = 0;
+        size_t lastIdentifier = 0;
+        bool hasIdentifier = false;
+        for (size_t j = i + 1; j < m_tokens.size(); ++j) {
+            const NTokenKind kind = m_tokens[j].kind;
+            if (kind == NTokenKind::DELIMITER_LBRACE) {
+                ++depth;
+                continue;
+            }
+            if (kind == NTokenKind::DELIMITER_RBRACE) {
+                --depth;
+                continue;
+            }
+            if (depth != 0) {
+                continue;
+            }
+            if (kind == NTokenKind::IDENTIFIER) {
+                lastIdentifier = j;
+                hasIdentifier = true;
+            }
+            if (kind == NTokenKind::DELIMITER_SEMICOLON) {
+                break;
+            }
+        }
+        if (hasIdentifier) {
+            m_typedefNames.insert(m_tokens[lastIdentifier].value);
+        }
+    }
+}
+
+bool Parser::isTypedefName(const std::string& name) const {
+    return m_typedefNames.find(name) != m_typedefNames.end();
+}
 
 Token Parser::currentToken() const {
     if (m_pos >= m_tokens.size()) {
@@ -69,11 +110,13 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         return parseTypedefDeclaration();
     }
 
-    // 类型开头：builtin 关键字或 struct
+    // 类型开头：builtin 关键字、struct 或 typedef 别名
     if (currentToken().kind == NTokenKind::KEYWORD_INT
         || currentToken().kind == NTokenKind::KEYWORD_CHAR
         || currentToken().kind == NTokenKind::KEYWORD_VOID
-        || currentToken().kind == NTokenKind::KEYWORD_STRUCT) {
+        || currentToken().kind == NTokenKind::KEYWORD_STRUCT
+        || (currentToken().kind == NTokenKind::IDENTIFIER
+            && isTypedefName(currentToken().value))) {
 
         // 保存当前位置
         size_t startPos = m_pos;
@@ -125,7 +168,8 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
     return nullptr;
 }
 
-// 类型前缀：builtin 关键字或 `struct Tag`；line/column 返回首个 token 位置
+// 类型前缀：builtin 关键字、`struct Tag` 或 typedef 别名；line/column 返回
+// 首个 token 位置
 std::string Parser::parseTypePrefix(bool& isStructTag, int& line, int& column) {
     isStructTag = false;
     line = currentToken().line;
@@ -148,6 +192,14 @@ std::string Parser::parseTypePrefix(bool& isStructTag, int& line, int& column) {
         std::string type = currentToken().value;
         advance();
         return type;
+    }
+
+    // typedef 别名作类型名（透明展开由语义/代码生成完成）
+    if (currentToken().kind == NTokenKind::IDENTIFIER
+        && isTypedefName(currentToken().value)) {
+        std::string alias = currentToken().value;
+        advance();
+        return alias;
     }
 
     error("Expected type keyword");
@@ -512,6 +564,11 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
 }
 
 std::unique_ptr<Stmt> Parser::parseStatement() {
+    // typedef 别名开头的语句是局部变量声明（`MyInt x = 5;`）
+    if (currentToken().kind == NTokenKind::IDENTIFIER
+        && isTypedefName(currentToken().value)) {
+        return parseVarDeclarationStmt();
+    }
     switch (currentToken().kind) {
     case NTokenKind::DELIMITER_LBRACE:
         return parseCompoundStatement();

@@ -4,6 +4,7 @@
 #include "ncc/ast.hpp"
 #include "ncc/lexer.hpp"
 #include <memory>
+#include <set>
 #include <vector>
 
 class Parser {
@@ -22,11 +23,10 @@ private:
     // 辅助函数
     Token currentToken() const;
     Token peekToken() const;
-    Token peekTokenAt(size_t offset) const;
     void advance();
     bool match(NTokenKind kind);
     bool expect(NTokenKind kind);
-    // 是否已登记的 typedef 别名（解析器按声明顺序维护，供语句分发消歧）
+    // 是否已登记的 typedef 别名（构造时对 token 预扫描收集，供语句分发消歧）
     bool isTypedefName(const std::string& name) const;
 
     // 解析函数
