@@ -31,7 +31,7 @@ NVirtualMachine::NVirtualMachine(int32_t stackSize)
     m_nextHostAddr = HOST_ADDRESS_BASE;
     // m_sp/m_bp 是 m_registers[4]/[5] 的引用别名，须先清零寄存器，
     // 再通过引用写入 SP 初始值（栈从高地址向低地址生长）
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < REGISTER_COUNT; i++)
         m_registers[i] = 0;
     m_sp = stackSize;
 }
@@ -79,10 +79,10 @@ NVirtualMachine::load(std::string filename)
 void
 NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
 {
-    if (memcmp(data, "NanoC\0\0\0", 8) != 0)
+    if (memcmp(data, NCI_MAGIC, sizeof(NCI_MAGIC)) != 0)
         throw std::runtime_error("NCI v2.1: bad magic (expect \"NanoC\\0\\0\\0\")");
     int32_t headerSize = readI32(data, 8);
-    if (headerSize != 32)
+    if (headerSize != NCI_HEADER_SIZE)
         throw std::runtime_error("NCI v2.1: unsupported headerSize "
                                  + std::to_string(headerSize) + " (expect 32)");
     int32_t codeSize = readI32(data, 12);
@@ -92,14 +92,14 @@ NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
     int32_t entryPoint = readI32(data, 28);
     if (codeSize < 0 || dataSize < 0 || importCount < 0 || exportCount < 0)
         throw std::runtime_error("NCI v2.1: negative segment/table size in header");
-    if ((int64_t)32 + codeSize + dataSize > fileSize)
+    if ((int64_t)NCI_HEADER_SIZE + codeSize + dataSize > fileSize)
         throw std::runtime_error("NCI v2.1: code/data size exceeds file size");
     if (entryPoint < 0 || entryPoint > codeSize)
         throw std::runtime_error("NCI v2.1: entryPoint out of code segment");
 
     // 导入表：int32 nameLen + name + NUL + pad 到 4 字节对齐（以 entry 起始为基准）+ addr
     // + flags
-    int64_t off = 32 + (int64_t)codeSize + dataSize;
+    int64_t off = NCI_HEADER_SIZE + (int64_t)codeSize + dataSize;
     std::vector<NImportSymbol> imports;
     for (int32_t i = 0; i < importCount; i++) {
         if (off + 4 > fileSize)
@@ -147,7 +147,7 @@ NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
     m_code = newCode;
     m_codeSize = codeSize;
     m_dataSize = dataSize;
-    memcpy(m_stack + codeSize, data + 32 + codeSize, dataSize);
+    memcpy(m_stack + codeSize, data + NCI_HEADER_SIZE + codeSize, dataSize);
     m_imports = std::move(imports);
     m_exports = std::move(exports);
     m_pc = entryPoint;
@@ -504,7 +504,7 @@ NVirtualMachine::start()
     h[0x71] = &NVirtualMachine::executeCLR;
     h[0x7F] = &NVirtualMachine::executeNOP;
     // 栈底压入哨兵返回地址：main 顶层的 leave/ret 落到代码段末尾，循环自然结束
-    m_sp -= 4;
+    m_sp -= STACK_SLOT_SIZE;
     *(int32_t *)&m_stack[m_sp] = (int32_t)m_codeSize;
 
     while (m_pc < m_codeSize) {
@@ -527,19 +527,19 @@ NVirtualMachine::print_info()
 void
 NVirtualMachine::print_stack(int32_t s, int32_t e)
 {
-    for (int i = s; i < e; i += 4)
+    for (int i = s; i < e; i += STACK_SLOT_SIZE)
         printf("[%04X]=%d\n", i, *(int32_t *)&m_stack[i]);
 }
 
 int32_t
 NVirtualMachine::getRegister(int32_t i)
 {
-    return i < 8 ? m_registers[i] : 0;
+    return i < REGISTER_COUNT ? m_registers[i] : 0;
 }
 void
 NVirtualMachine::setRegister(int32_t i, int32_t v)
 {
-    if (i < 8)
+    if (i < REGISTER_COUNT)
         m_registers[i] = v;
 }
 int32_t

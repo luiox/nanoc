@@ -4,10 +4,10 @@
 void
 NVirtualMachine::executeCMP()
 {
-    if (m_pc + 3 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG_REG <= m_codeSize) {
         uint8_t dest = m_code[m_pc + 1];
         uint8_t src = m_code[m_pc + 2];
-        if (dest < 8 && src < 8) {
+        if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             int32_t result = m_registers[dest] - m_registers[src];
             m_flags = 0;
             if (result == 0)
@@ -16,7 +16,7 @@ NVirtualMachine::executeCMP()
                 m_flags |= FLAG_N;
             if (result > 0)
                 m_flags |= FLAG_P;
-            m_pc += 3;
+            m_pc += INSTR_LEN_REG_REG;
         }
     }
 }
@@ -24,10 +24,10 @@ NVirtualMachine::executeCMP()
 void
 NVirtualMachine::executeCMPI()
 {
-    if (m_pc + 6 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
         int32_t val = *(int32_t *)&m_code[m_pc + 2];
-        if (reg < 8) {
+        if (reg < REGISTER_COUNT) {
             int32_t result = m_registers[reg] - val;
             m_flags = 0;
             if (result == 0)
@@ -36,7 +36,7 @@ NVirtualMachine::executeCMPI()
                 m_flags |= FLAG_N;
             if (result > 0)
                 m_flags |= FLAG_P;
-            m_pc += 6;
+            m_pc += INSTR_LEN_REG_IMM32;
         }
     }
 }
@@ -44,10 +44,10 @@ NVirtualMachine::executeCMPI()
 void
 NVirtualMachine::executeTEST()
 {
-    if (m_pc + 3 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG_REG <= m_codeSize) {
         uint8_t dest = m_code[m_pc + 1];
         uint8_t src = m_code[m_pc + 2];
-        if (dest < 8 && src < 8) {
+        if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             int32_t result = m_registers[dest] & m_registers[src];
             m_flags = 0;
             if (result == 0)
@@ -56,7 +56,7 @@ NVirtualMachine::executeTEST()
                 m_flags |= FLAG_N;
             if (result > 0)
                 m_flags |= FLAG_P;
-            m_pc += 3;
+            m_pc += INSTR_LEN_REG_REG;
         }
     }
 }
@@ -64,12 +64,12 @@ NVirtualMachine::executeTEST()
 void
 NVirtualMachine::executeAND()
 {
-    if (m_pc + 3 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG_REG <= m_codeSize) {
         uint8_t dest = m_code[m_pc + 1];
         uint8_t src = m_code[m_pc + 2];
-        if (dest < 8 && src < 8) {
+        if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             m_registers[dest] &= m_registers[src];
-            m_pc += 3;
+            m_pc += INSTR_LEN_REG_REG;
         }
     }
 }
@@ -77,12 +77,12 @@ NVirtualMachine::executeAND()
 void
 NVirtualMachine::executeOR()
 {
-    if (m_pc + 3 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG_REG <= m_codeSize) {
         uint8_t dest = m_code[m_pc + 1];
         uint8_t src = m_code[m_pc + 2];
-        if (dest < 8 && src < 8) {
+        if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             m_registers[dest] |= m_registers[src];
-            m_pc += 3;
+            m_pc += INSTR_LEN_REG_REG;
         }
     }
 }
@@ -90,12 +90,12 @@ NVirtualMachine::executeOR()
 void
 NVirtualMachine::executeXOR()
 {
-    if (m_pc + 3 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG_REG <= m_codeSize) {
         uint8_t dest = m_code[m_pc + 1];
         uint8_t src = m_code[m_pc + 2];
-        if (dest < 8 && src < 8) {
+        if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             m_registers[dest] ^= m_registers[src];
-            m_pc += 3;
+            m_pc += INSTR_LEN_REG_REG;
         }
     }
 }
@@ -103,12 +103,12 @@ NVirtualMachine::executeXOR()
 void
 NVirtualMachine::executeSHL()
 {
-    if (m_pc + 3 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG_REG <= m_codeSize) {
         uint8_t dest = m_code[m_pc + 1];
         uint8_t src = m_code[m_pc + 2];
-        if (dest < 8 && src < 8) {
+        if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             m_registers[dest] <<= m_registers[src];
-            m_pc += 3;
+            m_pc += INSTR_LEN_REG_REG;
         }
     }
 }
@@ -116,12 +116,12 @@ NVirtualMachine::executeSHL()
 void
 NVirtualMachine::executeSHR()
 {
-    if (m_pc + 3 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG_REG <= m_codeSize) {
         uint8_t dest = m_code[m_pc + 1];
         uint8_t src = m_code[m_pc + 2];
-        if (dest < 8 && src < 8) {
+        if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             m_registers[dest] >>= m_registers[src];
-            m_pc += 3;
+            m_pc += INSTR_LEN_REG_REG;
         }
     }
 }

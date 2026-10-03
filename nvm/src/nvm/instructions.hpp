@@ -23,4 +23,22 @@ enum class NRegister : uint8_t {
     R7 = 7,
 };
 
+// 通用寄存器数量（R0-R7，与 NRegister 编码一致；R4=SP、R5=BP）
+constexpr int32_t REGISTER_COUNT = 8;
+
+// 指令长度（字节，规范 §3.1 指令长度表；按操作数形态命名，取指边界检查用）
+constexpr int32_t INSTR_LEN_NONE = 1; // 仅 opcode：LEAVE/RET/NOP
+constexpr int32_t INSTR_LEN_REG = 2;  // opcode + reg：PUSH/POP/NOT/NEG/CLR
+constexpr int32_t INSTR_LEN_REG_REG =
+  3; // opcode + reg + reg：算逻/访存寄存器形式
+     // （SHLI/SHRI 的 imm8、ENTER 的 imm16 同为 3 字节）
+constexpr int32_t INSTR_LEN_IMM32 =
+  5; // opcode + imm32：PUSHI/JMP/JZ/JNZ/JN/JP/CALL/CALLX
+constexpr int32_t INSTR_LEN_REG_IMM32 =
+  6; // opcode + reg + imm32：LMM/ST/LEA/LOADA/STOREA
+     // 与各立即数算逻（ADDI/CMPI/...）
+
+// 32 位栈槽宽度（int32；压栈/出栈/调用返回地址均占 4 字节）
+constexpr int32_t STACK_SLOT_SIZE = 4;
+
 #endif // NVM_INSTRUCTION_H
