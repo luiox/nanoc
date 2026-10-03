@@ -122,6 +122,10 @@ public:
     int arraySize = 0;
     int arrayDims = 0;
     bool isExported = false; // export 修饰的顶层全局变量（PRD R2a；局部/成员恒为 false）
+    // 依赖模块导出全局变量的合成声明（PRD R7 轻装载，仅独立编译模式）：
+    // 装载器从 import 闭包提取签名后注入，isImported 供 buildLinkageTable →
+    // CodeGenerator 识别为导入符号（引用走导入表，不落本模块数据段）
+    bool isImported = false;
     std::unique_ptr<Expr> initializer;
 
     VarDeclaration(const std::string& t, const std::string& n, int l, int c)
