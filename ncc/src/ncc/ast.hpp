@@ -44,17 +44,19 @@ enum class ASTNodeType {
     PARAMETER,
     ARGUMENT,
 
-    // 追加区（PRD R10/R11 语言特性；新节点类型只在表尾追加，
+    // 追加区（PRD R10/R11/R12 语言特性；新节点类型只在表尾追加，
     // 不改动既有枚举值——并行分支合并冲突最小化）
     DEFER_STMT, // defer <表达式语句>;（PRD R10）
-    MATCH_EXPR  // match (x) { patterns => body, ... }（PRD R11）
+    MATCH_EXPR, // match (x) { patterns => body, ... }（PRD R11）
+    YIELD_STMT  // yield <表达式>;（PRD R12，协程挂起点）
 };
 
 // 前向声明
 class ASTVisitor;
-// 追加区节点的前置声明（PRD R10/R11；完整定义在本文件尾部追加区）
+// 追加区节点的前置声明（PRD R10/R11/R12；完整定义在本文件尾部追加区）
 class DeferStmt;
 class MatchExpr;
+class YieldStmt;
 
 // import 指令（PRD R2a 多文件整体编译）：
 // - `import math;` → target = "math"，quoted = false（装载器解析为导入者同目录 math.nc）
@@ -157,6 +159,9 @@ public:
     // 可与同名定义合并（C 原型语义：原型+定义幂等）；未被定义的原型与 extern
     // 同路径（callx 宿主外部符号），但与 extern 的重复声明冲突规则相互独立
     bool isPrototype = false;
+    // coro 修饰的协程函数（PRD R12）：体内可用 yield；不可被直接调用
+    // （只能经 coro_create 创建句柄）；IR 层经状态机变换降解（决策 A2）
+    bool isCoro = false;
     std::unique_ptr<Stmt> body; // extern 声明为 nullptr
 
     FuncDeclaration(const std::string& rt, const std::string& n, int l, int c)
@@ -475,9 +480,10 @@ public:
     virtual void visit(InitListExpr& node) = 0;
     virtual void visit(StmtVarDeclaration& node) = 0;
 
-    // 追加区（PRD R10/R11；新 visit 方法只在接口尾部追加）
+    // 追加区（PRD R10/R11/R12；新 visit 方法只在接口尾部追加）
     virtual void visit(DeferStmt& node) = 0;
     virtual void visit(MatchExpr& node) = 0;
+    virtual void visit(YieldStmt& node) = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -533,6 +539,19 @@ public:
     std::vector<std::unique_ptr<MatchArm>> arms;
 
     MatchExpr(int l, int c) : Expr(ASTNodeType::MATCH_EXPR, l, c) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
+// yield 语句（PRD R12）：`yield <表达式>;`。仅允许出现在 coro 函数体内
+// （语义层裁决），且不得出现在 pending defer 的作用域内（PRD 硬约束）。
+// 挂起语义在 IR 层经状态机变换降解（IrYieldStmt → 状态存储 + return），后端
+// 不可见独立的 yield 形态。
+class YieldStmt : public Stmt {
+public:
+    std::unique_ptr<Expr> value; // 产出值（coro 函数返回类型 = int，一期限定）
+
+    YieldStmt(int l, int c) : Stmt(ASTNodeType::YIELD_STMT, l, c) {}
 
     void accept(ASTVisitor& visitor) override;
 };

@@ -109,6 +109,36 @@ int main() {
 
 ---
 
+### 6. coro_iterator.nc - 协程迭代器（PRD R12）
+
+```c
+coro int squares(int n) {
+    for (int i = 0; i < n; i = i + 1) {
+        yield i * i;
+    }
+    return -1;
+}
+
+int main() {
+    int h = coro_create(squares, 5);
+    int sum = 0;
+    int v = coro_resume(h);
+    while (v >= 0) {
+        sum = sum + v;
+        v = coro_resume(h);
+    }
+    return sum; // 0+1+4+9+16 = 30
+}
+```
+
+**生成的代码特点：**
+- `coro` 函数经编译器状态机变换降解（无栈协程，决策 A2）
+- `yield` 挂起点 = 存恢复点 + 返回产出值；`coro_resume` 恢复续跑
+- 跨 `yield` 的局部变量与参数提升到帧存储（全局帧槽数组）
+- `coro_create` 取句柄、`coro_done` 查询完成标志
+
+---
+
 ## 编译器支持的C语言特性
 
 ### 数据类型

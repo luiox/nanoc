@@ -3,10 +3,10 @@
 #include "ncc/ast.hpp"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <utility>
-
 // AST → IR 降级器与 dump（设计决策见 ir.hpp 文件头注释）。
 //
 // lower 遍历策略与 SemanticAnalyzer 保持同构（输入契约 = 已通过语义分析）：
@@ -18,6 +18,11 @@
 // - 表达式类型推导规则镜像 semantic::checkExpr（char 提升、数组退化、指针
 //   算术、成员查表）；非法组合（语义层已报）降级为 Kind::Error 抑制级联。
 namespace ir {
+
+    // R12 coro（PRD R12）：每 coro 函数的并发实例上限（帧槽数；句柄编码
+    // h = fnid * CORO_MAX_INSTS + slot）。教学定位的朴素上限，运行时越界
+    // （实例数超限）未定义，由使用方自律
+    constexpr int CORO_MAX_INSTS = 16;
 
     // ---------------------------------------------------------------------------
     // IrType
@@ -98,6 +103,9 @@ namespace ir {
     // ---------------------------------------------------------------------------
 
     namespace {
+
+        // R12 coro 状态机变换（定义在文件尾；lower 尾部调用）
+        std::optional<std::string> transformCoroutines(Module& module);
 
         // 数组名在值语境退化为 pointer-to-T（与 semantic::decayed 一致）
         IrType decayed(const IrType& type) {
@@ -220,6 +228,14 @@ namespace ir {
                 return std::make_unique<IrBreakStmt>(stmt.line, stmt.column);
             case IrStmt::Kind::Continue:
                 return std::make_unique<IrContinueStmt>(stmt.line, stmt.column);
+            case IrStmt::Kind::Yield: {
+                const auto& yieldStmt = static_cast<const IrYieldStmt&>(stmt);
+                std::unique_ptr<IrExpr> value =
+                  yieldStmt.value ? cloneExpr(*yieldStmt.value) : nullptr;
+                return std::make_unique<IrYieldStmt>(std::move(value),
+                                                     yieldStmt.line,
+                                                     yieldStmt.column);
+            }
             case IrStmt::Kind::Block: {
                 const auto& block = static_cast<const IrBlockStmt&>(stmt);
                 auto copy = std::make_unique<IrBlockStmt>(block.line, block.column);
@@ -393,6 +409,19 @@ namespace ir {
                         if (!func.isExtern && !func.isPrototype) {
                             definedFunctionNames.insert(func.name);
                         }
+                        // R12 coro：签名按声明序登记（coro_create 展开引用）
+                        if (func.isCoro && !func.isExtern && !func.isPrototype) {
+                            std::vector<IrParam> signature;
+                            for (const auto& param : func.parameters) {
+                                IrParam entry;
+                                entry.name = param->name;
+                                entry.type = resolveVarDeclType(*param);
+                                signature.push_back(std::move(entry));
+                            }
+                            m_coroFnids[func.name] =
+                              static_cast<int>(m_coroSignatures.size());
+                            m_coroSignatures[func.name] = std::move(signature);
+                        }
                     }
                 }
 
@@ -458,6 +487,15 @@ namespace ir {
                       "statement position"));
                 }
 
+                // R12 coro 状态机变换（PRD R12，决策 A2）：把含 IrYieldStmt 的
+                // coro 函数降解为纯既有构造的状态机 + 注入帧存储/句柄分发，
+                // 后端只见既有语句形态（三后端零改动）。变换错误 = 语义层应已
+                // 拦截的契约破坏，按 lower Err 返回
+                std::optional<std::string> coroError = transformCoroutines(m_module);
+                if (coroError) {
+                    return ca::Err(*coroError);
+                }
+
                 return ca::Ok(std::move(m_module));
             }
 
@@ -498,6 +536,15 @@ namespace ir {
             std::vector<std::unique_ptr<IrStmt>> m_prelude;
 
             IrType m_currentReturnType = IrType::Error; // 当前函数返回类型
+
+            // ---- R12 coro（登记状态；状态机变换见文件尾 CoroStateMachine）----
+            // coro 函数签名按声明序登记（coro_create 展开需要参数表与 fnid；
+            // fnid 编码进句柄：h = fnid*CORO_MAX_INSTS + slot）。extern/prototype
+            // 的 coro 已由语义层拒绝，这里只登记有定义的
+            std::map<std::string, std::vector<IrParam>> m_coroSignatures;
+            std::map<std::string, int> m_coroFnids;
+            int m_coroCreateCounter = 0;   // coro_create 展开的临时编号（每函数重置）
+            std::string m_currentCoroName; // 非空 = 当前函数是 coro（lower 防御用）
 
             // ---- 作用域辅助 ----
             void pushScope() { m_scopes.emplace_back(); }
@@ -951,6 +998,109 @@ namespace ir {
                 return std::make_unique<IrVarRef>(resultName, IrType::Int, line, column);
             }
 
+            // ---- R12 coro_create 展开（PRD R12）----
+            // `coro_create(name, args...)` 内联展开为：分配帧槽（bump 计数器）
+            // → 初始化 __state/__done → 实参落帧；表达式值 = 编码句柄
+            // fnid*CORO_MAX_INSTS + slot。分配语句经 prelude 平铺在调用点的
+            // 语句边界（与 match 的语句化提升同机制）。语义层已检查：首实参为
+            // 本单元定义的 coro 函数名、实参数/类型匹配
+            std::unique_ptr<IrExpr> lowerCoroCreate(const CallExpr& call) {
+                const int line = call.line;
+                const int column = call.column;
+                const auto& first = *call.arguments.front();
+                if (first.type != ASTNodeType::IDENTIFIER_EXPR) {
+                    return errorExpr(line, column); // 语义层已拒绝；防御
+                }
+                const std::string name = static_cast<const IdentifierExpr&>(first).name;
+                auto sigIt = m_coroSignatures.find(name);
+                auto idIt = m_coroFnids.find(name);
+                if (sigIt == m_coroSignatures.end() || idIt == m_coroFnids.end()) {
+                    return errorExpr(line, column); // 语义层已拒绝；防御
+                }
+                const int fnid = idIt->second;
+                const std::string frameTag = "__coro_frame_" + name;
+                const std::string framesName = "__coro_frames_" + name;
+                const std::string nextName = "__coro_next_" + name;
+                const std::string slotTmp =
+                  "__coro_c" + std::to_string(m_coroCreateCounter++);
+
+                auto intRef = [&](std::string n) {
+                    return std::make_unique<IrVarRef>(std::move(n),
+                                                      IrType::Int,
+                                                      line,
+                                                      column);
+                };
+                // frames[slot]（struct 值语境，成员访问的基）
+                auto frameValue = [&]() {
+                    auto base = std::make_unique<IrVarRef>(
+                      framesName,
+                      IrType::arrayOf(IrType::structOf(frameTag), CORO_MAX_INSTS),
+                      line,
+                      column);
+                    return std::make_unique<IrIndexExpr>(std::move(base),
+                                                         intRef(slotTmp),
+                                                         IrType::structOf(frameTag),
+                                                         line,
+                                                         column);
+                };
+                auto frameField = [&](std::string member) {
+                    return std::make_unique<IrMemberExpr>(frameValue(),
+                                                          std::move(member),
+                                                          false,
+                                                          IrType::Int,
+                                                          line,
+                                                          column);
+                };
+                auto store = [&](std::unique_ptr<IrExpr> target,
+                                 std::unique_ptr<IrExpr> value) {
+                    emitPrelude(std::make_unique<IrStoreStmt>(std::move(target),
+                                                              std::move(value),
+                                                              line,
+                                                              column));
+                };
+
+                declareLocal(slotTmp, IrType::Int);
+                emitPrelude(std::make_unique<IrLetStmt>(slotTmp,
+                                                        IrType::Int,
+                                                        nullptr,
+                                                        line,
+                                                        column));
+
+                // slot = __coro_next++; __state = 0; __done = 0
+                store(intRef(slotTmp), intRef(nextName));
+                store(intRef(nextName),
+                      std::make_unique<IrBinaryExpr>(
+                        "+",
+                        intRef(slotTmp),
+                        std::make_unique<IrIntConst>(1, line, column),
+                        IrType::Int,
+                        line,
+                        column));
+                store(frameField("__state"),
+                      std::make_unique<IrIntConst>(0, line, column));
+                store(frameField("__done"),
+                      std::make_unique<IrIntConst>(0, line, column));
+
+                // 实参落帧（实参数已由语义层与签名核对）
+                for (std::size_t i = 1; i < call.arguments.size(); ++i) {
+                    const IrParam& param =
+                      sigIt->second[std::min(i - 1, sigIt->second.size() - 1)];
+                    std::unique_ptr<IrExpr> value = call.arguments[i]
+                                                      ? lowerExpr(*call.arguments[i])
+                                                      : errorExpr(line, column);
+                    store(frameField(param.name), std::move(value));
+                }
+
+                // 句柄 = fnid * CORO_MAX_INSTS + slot
+                return std::make_unique<IrBinaryExpr>(
+                  "+",
+                  std::make_unique<IrIntConst>(fnid * CORO_MAX_INSTS, line, column),
+                  intRef(slotTmp),
+                  IrType::Int,
+                  line,
+                  column);
+            }
+
             // ---- 类型解析（镜像 semantic::declaredType，非法组合降级 Error 不报错）----
             IrType resolveDeclType(const std::string& baseName,
                                    bool isStructTag,
@@ -1225,6 +1375,25 @@ namespace ir {
 
                 case ASTNodeType::CALL_EXPR: {
                     const auto& call = static_cast<const CallExpr&>(expr);
+                    // R12 coro 内建（PRD R12；语义层已检查合法性）：
+                    // - coro_create：内联展开为帧槽分配 + 参数落帧的语句序列
+                    //   （prelude 平铺到语句边界），表达式值为编码句柄
+                    // - coro_resume/coro_done：改写为注入函数调用（变换收尾
+                    //   注入定义）
+                    if (call.callee == "coro_create") {
+                        return lowerCoroCreate(call);
+                    }
+                    if (call.callee == "coro_resume" || call.callee == "coro_done") {
+                        auto node =
+                          std::make_unique<IrCallExpr>(std::string("__") + call.callee,
+                                                       IrType::Int,
+                                                       call.line,
+                                                       call.column);
+                        if (!call.arguments.empty() && call.arguments.front()) {
+                            node->arguments.push_back(lowerExpr(*call.arguments.front()));
+                        }
+                        return node;
+                    }
                     const auto knownReturn = m_functionReturns.find(call.callee);
                     auto node = std::make_unique<IrCallExpr>(
                       call.callee,
@@ -1559,6 +1728,21 @@ namespace ir {
                     return nullptr;
                 }
 
+                case ASTNodeType::YIELD_STMT: {
+                    // R12 yield 点（PRD R12）：降为 IrYieldStmt，状态机变换
+                    // （transformCoroutines）消费——本语句不在此处展开挂起语义
+                    const auto& yieldStmt = static_cast<const YieldStmt&>(stmt);
+                    std::unique_ptr<IrExpr> value;
+                    if (yieldStmt.value) {
+                        value = lowerExpr(*yieldStmt.value);
+                    } else {
+                        value = std::make_unique<IrIntConst>(0, stmt.line, stmt.column);
+                    }
+                    return std::make_unique<IrYieldStmt>(std::move(value),
+                                                         stmt.line,
+                                                         stmt.column);
+                }
+
                 case ASTNodeType::EXPR_STMT: {
                     const auto& exprStmt = static_cast<const ExprStmt&>(stmt);
                     if (!exprStmt.expression) {
@@ -1601,12 +1785,15 @@ namespace ir {
                                                    decl.returnPointerDepth,
                                                    false,
                                                    0);
+                func->isCoro = decl.isCoro; // R12：状态机变换的输入标记
 
-                // R10/R11 函数级状态重置：临时编号、值捕获声明、返回类型
+                // R10/R11/R12 函数级状态重置：临时编号、值捕获声明、返回类型
                 m_deferCounter = 0;
                 m_matchCounter = 0;
+                m_coroCreateCounter = 0;
                 m_deferTempLets.clear();
                 m_currentReturnType = func->returnType;
+                m_currentCoroName = decl.isCoro ? decl.name : std::string();
 
                 std::vector<IrLocal> locals;
                 m_locals = &locals;
@@ -1644,6 +1831,7 @@ namespace ir {
 
                 func->locals = std::move(locals);
                 m_locals = nullptr;
+                m_currentCoroName.clear();
                 return func;
             }
 
@@ -1658,6 +1846,1033 @@ namespace ir {
                 return global;
             }
         };
+
+        // -----------------------------------------------------------------------
+        // R12 coro 状态机变换（PRD R12，决策 A2：无栈协程 = 状态机变换）。
+        //
+        // 输入：lower 产物的 coro 函数（isCoro，body 可能含 IrYieldStmt）。
+        // 输出：同名同槽位的普通 IR 函数（签名 (int __coro_h)），body 只由
+        // 既有语句形态组成；每 coro 函数注入一个帧 struct + 帧数组/槽计数器
+        // 全局；单元内有 coro 时追加注入 __coro_resume/__coro_done 分发函数。
+        //
+        // 变换算法（结构化语句 → 显式状态分发）：
+        // - 状态 = 基本块（CoroState）；状态 i 的块体以无条件转移
+        //   （store __state = j）、条件转移（If(c, store t, store f)）、yield
+        //   返回（store __state = 恢复点 + return 产出值）或完成返回
+        //   （__done = 1 + __retval = v + return）收尾；
+        // - 分发循环：while (1) { if (fp->__state == 0) {...} else if ... else
+        //   break; }；0 号块固定为入口转移块（coro_create 初始化 __state = 0）；
+        // - compileSeq 按序消费语句列表：普通语句并入当前块的 pending；控制流
+        //   语句（If/While/For/Yield/Return/Break/Continue）切分状态并把剩余
+        //   序列编译为后续状态（continuation 显式化为状态号，无需重复编译）；
+        // - 参数与全部局部变量提升到帧（帧字段按 params→locals 声明序），表达式
+        //   改写为 fp->field 访问（fp 为状态机函数自己的栈局部，无挂起存活问题）。
+        //
+        // 运行时布局约定（与 lowerCoroCreate 展开一致）：
+        // - 帧字段：__state（0=初始，k=恢复点，-1=完成）、__done、__retval，
+        //   随后 params 与 locals 各一槽（一期提升仅标量/指针，语义层已限定）；
+        // - 句柄：h = fnid * CORO_MAX_INSTS + slot；__coro_resume/__coro_done
+        //   按 h 区间分发到对应 coro 的状态机函数/帧字段；
+        // - resume 已完成的协程幂等返回 __retval（函数头 done 拦截）。
+        // -----------------------------------------------------------------------
+
+        // 内部契约错误（语义层应已拦截的形态）；transformCoroutines 捕获后
+        // 转为 lower Err
+        struct CoroContractError {
+            std::string message;
+        };
+
+        class CoroStateMachine {
+        public:
+            CoroStateMachine(Module& module, IrFunction& fn, int fnid)
+              : m_module(module), m_fn(fn), m_fnid(fnid),
+                m_frameTag("__coro_frame_" + fn.name),
+                m_framesName("__coro_frames_" + fn.name),
+                m_nextName("__coro_next_" + fn.name),
+                m_fpType(IrType::pointerTo(IrType::structOf(m_frameTag))) {
+                // 0 号状态预留为入口转移块（coro_create 初始化 __state = 0）
+                m_states.push_back(CoroState{ 0, {} });
+            }
+
+            void run() {
+                collectPromoted();
+                injectFrameStorage();
+                if (m_fn.body) {
+                    rewriteStmt(m_fn.body.get());
+                    const int entry =
+                      compileSeq(std::move(m_fn.body->statements),
+                                 CoroCont::finish(std::make_unique<IrIntConst>(0, 0, 0)));
+                    m_states[0].stmts.push_back(storeState(entry, 0, 0));
+                }
+                rewriteSignature();
+                m_fn.body = assembleBody();
+            }
+
+        private:
+            struct CoroState {
+                int number = 0;
+                std::vector<std::unique_ptr<IrStmt>> stmts;
+            };
+
+            // continuation：语句序列执行完的去向（Goto = 已分配状态号；
+            // Finish = 完成态返回，realize 时分配）
+            struct CoroCont {
+                enum class Kind { Goto, Finish };
+                Kind kind = Kind::Goto;
+                int target = 0;
+                std::unique_ptr<IrExpr> retVal;
+
+                static CoroCont goTo(int t) {
+                    CoroCont c;
+                    c.kind = Kind::Goto;
+                    c.target = t;
+                    return c;
+                }
+                static CoroCont finish(std::unique_ptr<IrExpr> value) {
+                    CoroCont c;
+                    c.kind = Kind::Finish;
+                    c.retVal = std::move(value);
+                    return c;
+                }
+            };
+
+            struct LoopTarget {
+                int breakEntry = 0;
+                int continueEntry = 0;
+            };
+
+            // ---- 帧布局与注入 ----
+
+            static bool isFrameType(const IrType& type) {
+                return type.kind == IrType::Kind::Int || type.kind == IrType::Kind::Char
+                       || type.kind == IrType::Kind::Pointer;
+            }
+
+            void collectPromoted() {
+                for (const auto& param : m_fn.params) {
+                    if (!isFrameType(param.type)) {
+                        throw CoroContractError{ "internal: coro parameter '" + param.name
+                                                 + "' of '" + m_fn.name
+                                                 + "' has a non-frame type" };
+                    }
+                    m_promoted[param.name] = param.type;
+                }
+                for (const auto& local : m_fn.locals) {
+                    if (!isFrameType(local.type)) {
+                        throw CoroContractError{ "internal: coro local '" + local.name
+                                                 + "' of '" + m_fn.name
+                                                 + "' has a non-frame type" };
+                    }
+                    m_promoted[local.name] = local.type;
+                }
+            }
+
+            void injectFrameStorage() {
+                IrStructDef frame;
+                frame.tag = m_frameTag;
+                frame.complete = true;
+                const char* systemFields[] = { "__state", "__done", "__retval" };
+                for (const char* name : systemFields) {
+                    IrField field;
+                    field.name = name;
+                    field.type = IrType::Int;
+                    frame.fields.push_back(std::move(field));
+                }
+                // 提升字段按 params → locals 声明序（与 collectPromoted 一致）
+                for (const auto& param : m_fn.params) {
+                    IrField field;
+                    field.name = param.name;
+                    field.type = param.type;
+                    frame.fields.push_back(std::move(field));
+                }
+                for (const auto& local : m_fn.locals) {
+                    IrField field;
+                    field.name = local.name;
+                    field.type = local.type;
+                    frame.fields.push_back(std::move(field));
+                }
+                m_module.structs.push_back(std::move(frame));
+
+                IrGlobal framesVar;
+                framesVar.name = m_framesName;
+                framesVar.type =
+                  IrType::arrayOf(IrType::structOf(m_frameTag), CORO_MAX_INSTS);
+                m_module.globals.push_back(std::move(framesVar));
+
+                IrGlobal nextVar;
+                nextVar.name = m_nextName;
+                nextVar.type = IrType::Int;
+                m_module.globals.push_back(std::move(nextVar));
+            }
+
+            // ---- 表达式/语句改写（提升变量 → fp->field）----
+
+            std::unique_ptr<IrExpr> fpRef(int line, int column) const {
+                return std::make_unique<IrVarRef>(m_fpName, m_fpType, line, column);
+            }
+
+            std::unique_ptr<IrExpr> frameField(const std::string& member,
+                                               IrType type,
+                                               int line,
+                                               int column) const {
+                return std::make_unique<IrMemberExpr>(fpRef(line, column),
+                                                      member,
+                                                      true,
+                                                      std::move(type),
+                                                      line,
+                                                      column);
+            }
+
+            std::unique_ptr<IrExpr> hRef(int line, int column) const {
+                return std::make_unique<IrVarRef>("__coro_h", IrType::Int, line, column);
+            }
+
+            void rewriteExpr(std::unique_ptr<IrExpr>& expr) {
+                if (!expr) {
+                    return;
+                }
+                switch (expr->kind) {
+                case IrExpr::Kind::Var: {
+                    auto& var = static_cast<IrVarRef&>(*expr);
+                    auto it = m_promoted.find(var.name);
+                    if (it == m_promoted.end()) {
+                        return; // 全局/状态机自己的局部（fp、__coro_h）
+                    }
+                    const int line = var.line;
+                    const int column = var.column;
+                    IrType type = it->second;
+                    expr = std::make_unique<IrMemberExpr>(fpRef(line, column),
+                                                          var.name,
+                                                          true,
+                                                          std::move(type),
+                                                          line,
+                                                          column);
+                    return;
+                }
+                case IrExpr::Kind::Unary:
+                    rewriteExpr(static_cast<IrUnaryExpr&>(*expr).operand);
+                    break;
+                case IrExpr::Kind::Binary: {
+                    auto& binary = static_cast<IrBinaryExpr&>(*expr);
+                    rewriteExpr(binary.left);
+                    rewriteExpr(binary.right);
+                    break;
+                }
+                case IrExpr::Kind::Logical: {
+                    auto& logic = static_cast<IrLogicalExpr&>(*expr);
+                    rewriteExpr(logic.left);
+                    rewriteExpr(logic.right);
+                    break;
+                }
+                case IrExpr::Kind::Assign: {
+                    auto& assign = static_cast<IrAssignExpr&>(*expr);
+                    rewriteExpr(assign.target);
+                    rewriteExpr(assign.value);
+                    break;
+                }
+                case IrExpr::Kind::Index: {
+                    auto& index = static_cast<IrIndexExpr&>(*expr);
+                    rewriteExpr(index.base);
+                    rewriteExpr(index.index);
+                    break;
+                }
+                case IrExpr::Kind::Member:
+                    rewriteExpr(static_cast<IrMemberExpr&>(*expr).base);
+                    break;
+                case IrExpr::Kind::AddrOf:
+                    rewriteExpr(static_cast<IrAddrOfExpr&>(*expr).operand);
+                    break;
+                case IrExpr::Kind::Deref:
+                    rewriteExpr(static_cast<IrDerefExpr&>(*expr).operand);
+                    break;
+                case IrExpr::Kind::Call: {
+                    auto& call = static_cast<IrCallExpr&>(*expr);
+                    for (auto& argument : call.arguments) {
+                        rewriteExpr(argument);
+                    }
+                    break;
+                }
+                case IrExpr::Kind::InitList: {
+                    auto& init = static_cast<IrInitListExpr&>(*expr);
+                    for (auto& value : init.values) {
+                        rewriteExpr(value);
+                    }
+                    break;
+                }
+                case IrExpr::Kind::IntConst:
+                case IrExpr::Kind::CharConst:
+                case IrExpr::Kind::StringConst:
+                case IrExpr::Kind::NullConst:
+                    break;
+                }
+            }
+
+            void rewriteStmt(IrStmt* stmt) {
+                if (stmt == nullptr) {
+                    return;
+                }
+                switch (stmt->kind) {
+                case IrStmt::Kind::Let:
+                    rewriteExpr(static_cast<IrLetStmt*>(stmt)->init);
+                    break;
+                case IrStmt::Kind::Store: {
+                    auto& store = *static_cast<IrStoreStmt*>(stmt);
+                    rewriteExpr(store.target);
+                    rewriteExpr(store.value);
+                    break;
+                }
+                case IrStmt::Kind::Eval:
+                    rewriteExpr(static_cast<IrEvalStmt*>(stmt)->expression);
+                    break;
+                case IrStmt::Kind::If: {
+                    auto& ifStmt = *static_cast<IrIfStmt*>(stmt);
+                    rewriteExpr(ifStmt.condition);
+                    rewriteStmt(ifStmt.thenBranch.get());
+                    rewriteStmt(ifStmt.elseBranch.get());
+                    break;
+                }
+                case IrStmt::Kind::While: {
+                    auto& whileStmt = *static_cast<IrWhileStmt*>(stmt);
+                    rewriteExpr(whileStmt.condition);
+                    rewriteStmt(whileStmt.body.get());
+                    break;
+                }
+                case IrStmt::Kind::For: {
+                    auto& forStmt = *static_cast<IrForStmt*>(stmt);
+                    rewriteStmt(forStmt.init.get());
+                    rewriteExpr(forStmt.condition);
+                    rewriteExpr(forStmt.step);
+                    rewriteStmt(forStmt.body.get());
+                    break;
+                }
+                case IrStmt::Kind::Return:
+                    rewriteExpr(static_cast<IrReturnStmt*>(stmt)->value);
+                    break;
+                case IrStmt::Kind::Yield:
+                    rewriteExpr(static_cast<IrYieldStmt*>(stmt)->value);
+                    break;
+                case IrStmt::Kind::Block: {
+                    auto& block = static_cast<IrBlockStmt&>(*stmt);
+                    for (auto& inner : block.statements) {
+                        rewriteStmt(inner.get());
+                    }
+                    break;
+                }
+                case IrStmt::Kind::Break:
+                case IrStmt::Kind::Continue:
+                    break;
+                }
+            }
+
+            // ---- 状态块构造辅助 ----
+
+            int allocateState(std::vector<std::unique_ptr<IrStmt>> stmts) {
+                const int number = static_cast<int>(m_states.size());
+                m_states.push_back(CoroState{ number, std::move(stmts) });
+                return number;
+            }
+
+            std::unique_ptr<IrStmt> storeState(int target, int line, int column) const {
+                return std::make_unique<IrStoreStmt>(
+                  frameField("__state", IrType::Int, line, column),
+                  std::make_unique<IrIntConst>(target, line, column),
+                  line,
+                  column);
+            }
+
+            std::unique_ptr<IrStmt> storeField(const std::string& member,
+                                               std::unique_ptr<IrExpr> value,
+                                               int line,
+                                               int column) const {
+                return std::make_unique<IrStoreStmt>(
+                  frameField(member, IrType::Int, line, column),
+                  std::move(value),
+                  line,
+                  column);
+            }
+
+            // 完成态返回序列：__done = 1 → __state = -1 → __retval = v → return
+            void appendDoneReturn(std::vector<std::unique_ptr<IrStmt>>& list,
+                                  std::unique_ptr<IrExpr> value,
+                                  int line,
+                                  int column) {
+                list.push_back(storeField("__done",
+                                          std::make_unique<IrIntConst>(1, line, column),
+                                          line,
+                                          column));
+                list.push_back(storeField("__state",
+                                          std::make_unique<IrIntConst>(-1, line, column),
+                                          line,
+                                          column));
+                list.push_back(storeField("__retval", std::move(value), line, column));
+                list.push_back(std::make_unique<IrReturnStmt>(
+                  frameField("__retval", IrType::Int, line, column),
+                  line,
+                  column));
+            }
+
+            // 条件转移的两支（各为单语句块）
+            std::unique_ptr<IrStmt> branchTo(int target, int line, int column) const {
+                auto block = std::make_unique<IrBlockStmt>(line, column);
+                block->statements.push_back(storeState(target, line, column));
+                return block;
+            }
+
+            static bool isControlStmt(const IrStmt& stmt) {
+                switch (stmt.kind) {
+                case IrStmt::Kind::If:
+                case IrStmt::Kind::While:
+                case IrStmt::Kind::For:
+                case IrStmt::Kind::Return:
+                case IrStmt::Kind::Break:
+                case IrStmt::Kind::Continue:
+                case IrStmt::Kind::Yield:
+                    return true;
+                default:
+                    return false;
+                }
+            }
+
+            // 分支体 → 语句列表（块体取其语句，单语句包装成单元素列表）
+            static std::vector<std::unique_ptr<IrStmt>>
+            takeStatements(std::unique_ptr<IrStmt>& branch) {
+                std::vector<std::unique_ptr<IrStmt>> out;
+                if (!branch) {
+                    return out;
+                }
+                if (branch->kind == IrStmt::Kind::Block) {
+                    out = std::move(static_cast<IrBlockStmt&>(*branch).statements);
+                    return out;
+                }
+                out.push_back(std::move(branch));
+                return out;
+            }
+
+            int realizeCont(CoroCont cont) {
+                if (cont.kind == CoroCont::Kind::Goto) {
+                    return cont.target;
+                }
+                std::vector<std::unique_ptr<IrStmt>> stmts;
+                appendDoneReturn(stmts, std::move(cont.retVal), 0, 0);
+                return allocateState(std::move(stmts));
+            }
+
+            // 结构化语句序列 → 状态块图。返回序列入口状态号。
+            int compileSeq(std::vector<std::unique_ptr<IrStmt>> list, CoroCont cont) {
+                const int contEntry = realizeCont(std::move(cont));
+
+                std::vector<std::unique_ptr<IrStmt>> pending;
+                std::size_t i = 0;
+                while (i < list.size()) {
+                    const IrStmt& current = *list[i];
+                    if (current.kind == IrStmt::Kind::Let) {
+                        // 局部声明已提升到帧：声明语句本身丢弃，带初始化器的
+                        // 转为帧字段赋值（init 的表达式改写已在全树改写完成）
+                        auto& let = static_cast<IrLetStmt&>(*list[i]);
+                        if (let.init) {
+                            pending.push_back(std::make_unique<IrStoreStmt>(
+                              frameField(let.name, let.type, let.line, let.column),
+                              std::move(let.init),
+                              let.line,
+                              let.column));
+                        }
+                        ++i;
+                        continue;
+                    }
+                    if (current.kind == IrStmt::Kind::Block) {
+                        // 嵌套块展开（局部已全部提升，块只承担分组；coro 函数
+                        // 无 defer 作用域——语义层互斥保证）
+                        auto& block = static_cast<IrBlockStmt&>(*list[i]);
+                        std::vector<std::unique_ptr<IrStmt>> inner =
+                          std::move(block.statements);
+                        list.erase(list.begin() + static_cast<std::ptrdiff_t>(i));
+                        list.insert(list.begin() + static_cast<std::ptrdiff_t>(i),
+                                    std::make_move_iterator(inner.begin()),
+                                    std::make_move_iterator(inner.end()));
+                        continue;
+                    }
+                    if (!isControlStmt(current)) {
+                        pending.push_back(std::move(list[i]));
+                        ++i;
+                        continue;
+                    }
+                    break;
+                }
+
+                // 序列耗尽：块尾转移到 continuation 入口
+                if (i == list.size()) {
+                    pending.push_back(storeState(contEntry, 0, 0));
+                    return allocateState(std::move(pending));
+                }
+
+                // 控制流语句：切分状态；剩余序列编译为后续状态（语句在 yield/
+                // return/break/continue 之后不可达，丢弃）
+                std::vector<std::unique_ptr<IrStmt>> rest;
+                rest.assign(std::make_move_iterator(list.begin() + (i + 1)),
+                            std::make_move_iterator(list.end()));
+
+                const IrStmt::Kind kind = list[i]->kind;
+                const int line = list[i]->line;
+                const int column = list[i]->column;
+
+                switch (kind) {
+                case IrStmt::Kind::Yield: {
+                    auto& yieldStmt = static_cast<IrYieldStmt&>(*list[i]);
+                    std::unique_ptr<IrExpr> value =
+                      yieldStmt.value ? std::move(yieldStmt.value)
+                                      : std::make_unique<IrIntConst>(0, line, column);
+                    // 剩余序列先编译：恢复后从 yield 之后继续执行
+                    const int restEntry =
+                      compileSeq(std::move(rest), CoroCont::goTo(contEntry));
+                    // 挂起：记录恢复点后返回产出值；恢复点 = 后继序列入口
+                    pending.push_back(storeState(restEntry, line, column));
+                    pending.push_back(
+                      std::make_unique<IrReturnStmt>(std::move(value), line, column));
+                    return allocateState(std::move(pending));
+                }
+                case IrStmt::Kind::Return: {
+                    auto& returnStmt = static_cast<IrReturnStmt&>(*list[i]);
+                    std::unique_ptr<IrExpr> value =
+                      returnStmt.value ? std::move(returnStmt.value)
+                                       : std::make_unique<IrIntConst>(0, line, column);
+                    appendDoneReturn(pending, std::move(value), line, column);
+                    return allocateState(std::move(pending));
+                }
+                case IrStmt::Kind::Break: {
+                    if (m_loops.empty()) {
+                        throw CoroContractError{
+                            "internal: break outside a loop in coro '" + m_fn.name + "'"
+                        };
+                    }
+                    pending.push_back(
+                      storeState(m_loops.back().breakEntry, line, column));
+                    return allocateState(std::move(pending));
+                }
+                case IrStmt::Kind::Continue: {
+                    if (m_loops.empty()) {
+                        throw CoroContractError{
+                            "internal: continue outside a loop in coro '" + m_fn.name
+                            + "'"
+                        };
+                    }
+                    pending.push_back(
+                      storeState(m_loops.back().continueEntry, line, column));
+                    return allocateState(std::move(pending));
+                }
+                case IrStmt::Kind::If: {
+                    auto& ifStmt = static_cast<IrIfStmt&>(*list[i]);
+                    std::unique_ptr<IrExpr> condition = std::move(ifStmt.condition);
+                    std::vector<std::unique_ptr<IrStmt>> thenList =
+                      takeStatements(ifStmt.thenBranch);
+                    const bool hasElse = ifStmt.elseBranch != nullptr;
+                    std::vector<std::unique_ptr<IrStmt>> elseList =
+                      takeStatements(ifStmt.elseBranch);
+                    // 剩余序列先编译（分支共享其后继）
+                    const int restEntry =
+                      compileSeq(std::move(rest), CoroCont::goTo(contEntry));
+                    const int thenEntry =
+                      compileSeq(std::move(thenList), CoroCont::goTo(restEntry));
+                    const int elseEntry =
+                      hasElse ? compileSeq(std::move(elseList), CoroCont::goTo(restEntry))
+                              : restEntry;
+                    pending.push_back(
+                      std::make_unique<IrIfStmt>(std::move(condition),
+                                                 branchTo(thenEntry, line, column),
+                                                 branchTo(elseEntry, line, column),
+                                                 line,
+                                                 column));
+                    return allocateState(std::move(pending));
+                }
+                case IrStmt::Kind::While: {
+                    auto& whileStmt = static_cast<IrWhileStmt&>(*list[i]);
+                    std::unique_ptr<IrExpr> condition =
+                      whileStmt.condition ? std::move(whileStmt.condition)
+                                          : std::make_unique<IrIntConst>(1, line, column);
+                    std::vector<std::unique_ptr<IrStmt>> bodyList =
+                      takeStatements(whileStmt.body);
+                    const int head = allocateState({});
+                    // 剩余序列 = 条件为假的出口（break 目标同此——循环后的
+                    // 语句不可跳过）
+                    const int restEntry =
+                      compileSeq(std::move(rest), CoroCont::goTo(contEntry));
+                    m_loops.push_back(LoopTarget{ restEntry, head });
+                    const int bodyEntry =
+                      compileSeq(std::move(bodyList), CoroCont::goTo(head));
+                    m_loops.pop_back();
+                    // 循环头 = 纯条件判断（前缀语句不在这里——回边必须直达
+                    // head，否则每次迭代重跑前缀）
+                    std::vector<std::unique_ptr<IrStmt>> headStmts;
+                    headStmts.push_back(
+                      std::make_unique<IrIfStmt>(std::move(condition),
+                                                 branchTo(bodyEntry, line, column),
+                                                 branchTo(restEntry, line, column),
+                                                 line,
+                                                 column));
+                    m_states[head].stmts = std::move(headStmts);
+                    // 前缀语句独立状态块（一次性，回边不可达）：空前缀直接进 head
+                    if (!pending.empty()) {
+                        pending.push_back(storeState(head, line, column));
+                        return allocateState(std::move(pending));
+                    }
+                    return head;
+                }
+                case IrStmt::Kind::For: {
+                    auto& forStmt = static_cast<IrForStmt&>(*list[i]);
+                    // init 收集（与顶层同规则：Let → 帧赋值/丢弃，Block 展开；
+                    // 控制流语句在 for-init 是语义层外的病态形态，按契约破坏拒绝）
+                    std::vector<std::unique_ptr<IrStmt>> initStmts;
+                    if (forStmt.init) {
+                        std::vector<std::unique_ptr<IrStmt>> initList =
+                          takeStatements(forStmt.init);
+                        for (auto& initStmt : initList) {
+                            if (initStmt->kind == IrStmt::Kind::Let) {
+                                auto& let = static_cast<IrLetStmt&>(*initStmt);
+                                if (let.init) {
+                                    initStmts.push_back(std::make_unique<IrStoreStmt>(
+                                      frameField(let.name,
+                                                 let.type,
+                                                 let.line,
+                                                 let.column),
+                                      std::move(let.init),
+                                      let.line,
+                                      let.column));
+                                }
+                            } else if (!isControlStmt(*initStmt)) {
+                                initStmts.push_back(std::move(initStmt));
+                            } else {
+                                throw CoroContractError{ "internal: control-flow "
+                                                         "statement in for-init of coro '"
+                                                         + m_fn.name + "'" };
+                            }
+                        }
+                    }
+                    std::unique_ptr<IrExpr> condition =
+                      forStmt.condition ? std::move(forStmt.condition)
+                                        : std::make_unique<IrIntConst>(1, line, column);
+                    std::vector<std::unique_ptr<IrStmt>> bodyList =
+                      takeStatements(forStmt.body);
+                    const int head = allocateState({});
+                    // step 块：求值步进后回循环头；continue 目标 = step（无则头）
+                    int continueEntry = head;
+                    if (forStmt.step) {
+                        std::vector<std::unique_ptr<IrStmt>> stepStmts;
+                        stepStmts.push_back(
+                          std::make_unique<IrEvalStmt>(std::move(forStmt.step),
+                                                       line,
+                                                       column));
+                        stepStmts.push_back(storeState(head, line, column));
+                        continueEntry = allocateState(std::move(stepStmts));
+                    }
+                    const int restEntry =
+                      compileSeq(std::move(rest), CoroCont::goTo(contEntry));
+                    // break 目标 = 循环出口（restEntry）：循环后的语句不可跳过
+                    m_loops.push_back(LoopTarget{ restEntry, continueEntry });
+                    const int bodyEntry =
+                      compileSeq(std::move(bodyList), CoroCont::goTo(continueEntry));
+                    m_loops.pop_back();
+                    // 循环头 = 纯条件判断（init 不在这里——init 只在首次进入
+                    // 执行一次，回边必须直达 head，否则每次迭代重跑 init）
+                    std::vector<std::unique_ptr<IrStmt>> headStmts;
+                    headStmts.push_back(
+                      std::make_unique<IrIfStmt>(std::move(condition),
+                                                 branchTo(bodyEntry, line, column),
+                                                 branchTo(restEntry, line, column),
+                                                 line,
+                                                 column));
+                    m_states[head].stmts = std::move(headStmts);
+                    // init 独立状态块（一次性，回边不可达）：空 init 直接进 head
+                    if (!initStmts.empty()) {
+                        initStmts.push_back(storeState(head, line, column));
+                        return allocateState(std::move(initStmts));
+                    }
+                    return head;
+                }
+                default:
+                    throw CoroContractError{ "internal: unexpected statement kind in "
+                                             "coro body of '"
+                                             + m_fn.name + "'" };
+                }
+            }
+
+            // ---- 签名改写与 body 组装 ----
+
+            void rewriteSignature() {
+                m_fn.params.clear();
+                IrParam handle;
+                handle.name = "__coro_h";
+                handle.type = IrType::Int;
+                m_fn.params.push_back(std::move(handle));
+
+                m_fn.locals.clear();
+                IrLocal fp;
+                fp.name = m_fpName;
+                fp.type = m_fpType;
+                m_fn.locals.push_back(std::move(fp));
+            }
+
+            std::unique_ptr<IrBlockStmt> assembleBody() {
+                auto body = std::make_unique<IrBlockStmt>(0, 0);
+
+                // fp = &__coro_frames_<name>[__coro_h]
+                // （__coro_resume 分发时已减去 fnid*CORO_MAX_INSTS，状态机
+                // 收到的句柄就是本函数帧数组内的槽位下标）
+                auto framesRef = std::make_unique<IrVarRef>(
+                  m_framesName,
+                  IrType::arrayOf(IrType::structOf(m_frameTag), CORO_MAX_INSTS),
+                  0,
+                  0);
+                auto element = std::make_unique<IrIndexExpr>(std::move(framesRef),
+                                                             hRef(0, 0),
+                                                             IrType::structOf(m_frameTag),
+                                                             0,
+                                                             0);
+                auto address =
+                  std::make_unique<IrAddrOfExpr>(std::move(element), m_fpType, 0, 0);
+                body->statements.push_back(std::make_unique<IrLetStmt>(m_fpName,
+                                                                       m_fpType,
+                                                                       std::move(address),
+                                                                       0,
+                                                                       0));
+
+                // 完成幂等：if (fp->__done) return fp->__retval;
+                auto doneThen = std::make_unique<IrBlockStmt>(0, 0);
+                doneThen->statements.push_back(std::make_unique<IrReturnStmt>(
+                  frameField("__retval", IrType::Int, 0, 0),
+                  0,
+                  0));
+                body->statements.push_back(
+                  std::make_unique<IrIfStmt>(frameField("__done", IrType::Int, 0, 0),
+                                             std::move(doneThen),
+                                             nullptr,
+                                             0,
+                                             0));
+
+                // 状态分发：while (1) { if (fp->__state == k) {...} ... else break; }
+                std::unique_ptr<IrStmt> chain;
+                IrIfStmt* tail = nullptr;
+                for (auto& state : m_states) {
+                    auto condition = std::make_unique<IrBinaryExpr>(
+                      "==",
+                      frameField("__state", IrType::Int, 0, 0),
+                      std::make_unique<IrIntConst>(state.number, 0, 0),
+                      IrType::Int,
+                      0,
+                      0);
+                    auto branch = std::make_unique<IrBlockStmt>(0, 0);
+                    branch->statements = std::move(state.stmts);
+                    auto ifStmt = std::make_unique<IrIfStmt>(std::move(condition),
+                                                             std::move(branch),
+                                                             nullptr,
+                                                             0,
+                                                             0);
+                    IrIfStmt* raw = ifStmt.get();
+                    if (!chain) {
+                        chain = std::move(ifStmt);
+                    } else {
+                        tail->elseBranch = std::move(ifStmt);
+                    }
+                    tail = raw;
+                }
+                auto fallback = std::make_unique<IrBlockStmt>(0, 0);
+                fallback->statements.push_back(std::make_unique<IrBreakStmt>(0, 0));
+                tail->elseBranch = std::move(fallback);
+
+                auto whileBody = std::make_unique<IrBlockStmt>(0, 0);
+                whileBody->statements.push_back(std::move(chain));
+                body->statements.push_back(
+                  std::make_unique<IrWhileStmt>(std::make_unique<IrIntConst>(1, 0, 0),
+                                                std::move(whileBody),
+                                                0,
+                                                0));
+
+                // 兜底返回（所有状态块均以 return/终止收尾，不可达）
+                body->statements.push_back(
+                  std::make_unique<IrReturnStmt>(std::make_unique<IrIntConst>(0, 0, 0),
+                                                 0,
+                                                 0));
+                return body;
+            }
+
+            Module& m_module;
+            IrFunction& m_fn;
+            int m_fnid = 0;
+            std::string m_frameTag;
+            std::string m_framesName;
+            std::string m_nextName;
+            std::string m_fpName = "__coro_fp";
+            IrType m_fpType = IrType::pointerTo(IrType::structOf("__coro_frame"));
+            std::map<std::string, IrType> m_promoted;
+            std::vector<CoroState> m_states;
+            std::vector<LoopTarget> m_loops;
+        };
+
+        // 防御扫描：yield 出现在非 coro 函数（语义层已拦）/ defer 注册动作内
+        // （表达式语句形态不可能含 yield，此处为变换前置的完备性校验）。
+        // 注意"块内注册 defer 后同块 yield"的精确时序判定依赖注册点信息（IR
+        // 展开后不可得），由语义层的 pending-defer 计数裁决，这里不重复
+        std::string
+        scanYieldPlacement(const IrFunction& fn, const IrStmt& stmt, bool inDeferAction) {
+            switch (stmt.kind) {
+            case IrStmt::Kind::Yield:
+                if (!fn.isCoro) {
+                    return "internal: yield statement in non-coro function '" + fn.name
+                           + "'";
+                }
+                if (inDeferAction) {
+                    return "internal: yield inside a defer action in coro '" + fn.name
+                           + "'";
+                }
+                return "";
+            case IrStmt::Kind::If: {
+                const auto& ifStmt = static_cast<const IrIfStmt&>(stmt);
+                if (ifStmt.thenBranch) {
+                    std::string issue =
+                      scanYieldPlacement(fn, *ifStmt.thenBranch, inDeferAction);
+                    if (!issue.empty()) {
+                        return issue;
+                    }
+                }
+                if (ifStmt.elseBranch) {
+                    return scanYieldPlacement(fn, *ifStmt.elseBranch, inDeferAction);
+                }
+                return "";
+            }
+            case IrStmt::Kind::While: {
+                const auto& whileStmt = static_cast<const IrWhileStmt&>(stmt);
+                return whileStmt.body
+                         ? scanYieldPlacement(fn, *whileStmt.body, inDeferAction)
+                         : std::string();
+            }
+            case IrStmt::Kind::For: {
+                const auto& forStmt = static_cast<const IrForStmt&>(stmt);
+                if (forStmt.init) {
+                    std::string issue =
+                      scanYieldPlacement(fn, *forStmt.init, inDeferAction);
+                    if (!issue.empty()) {
+                        return issue;
+                    }
+                }
+                return forStmt.body ? scanYieldPlacement(fn, *forStmt.body, inDeferAction)
+                                    : std::string();
+            }
+            case IrStmt::Kind::Block: {
+                const auto* deferScope = dynamic_cast<const IrDeferScopeStmt*>(&stmt);
+                if (deferScope != nullptr) {
+                    // defer 注册动作内的 yield（防御性完备；正常不可达）
+                    for (const auto& action : deferScope->defers) {
+                        std::string issue = scanYieldPlacement(fn, *action, true);
+                        if (!issue.empty()) {
+                            return issue;
+                        }
+                    }
+                }
+                const auto& block = static_cast<const IrBlockStmt&>(stmt);
+                for (const auto& inner : block.statements) {
+                    std::string issue = scanYieldPlacement(fn, *inner, inDeferAction);
+                    if (!issue.empty()) {
+                        return issue;
+                    }
+                }
+                return "";
+            }
+            default:
+                return "";
+            }
+        }
+
+        std::string scanCoroContract(const IrFunction& fn) {
+            if (!fn.body) {
+                return "";
+            }
+            for (const auto& stmt : fn.body->statements) {
+                std::string issue = scanYieldPlacement(fn, *stmt, false);
+                if (!issue.empty()) {
+                    return issue;
+                }
+            }
+            return "";
+        }
+
+        // __coro_resume(h)：按句柄区间分发到对应 coro 的状态机函数
+        std::unique_ptr<IrFunction> buildCoroResume(const Module& module) {
+            std::vector<const IrFunction*> coros;
+            for (const auto& fn : module.functions) {
+                if (fn->isCoro) {
+                    coros.push_back(fn.get());
+                }
+            }
+            auto resume = std::make_unique<IrFunction>();
+            resume->name = "__coro_resume";
+            resume->returnType = IrType::Int;
+            IrParam handle;
+            handle.name = "h";
+            handle.type = IrType::Int;
+            resume->params.push_back(std::move(handle));
+            resume->body = std::make_unique<IrBlockStmt>(0, 0);
+
+            std::unique_ptr<IrStmt> chain;
+            IrIfStmt* tail = nullptr;
+            for (std::size_t k = 0; k < coros.size(); ++k) {
+                auto condition = std::make_unique<IrBinaryExpr>(
+                  "<",
+                  std::make_unique<IrVarRef>("h", IrType::Int, 0, 0),
+                  std::make_unique<IrIntConst>(static_cast<int>(k + 1) * CORO_MAX_INSTS,
+                                               0,
+                                               0),
+                  IrType::Int,
+                  0,
+                  0);
+                auto call =
+                  std::make_unique<IrCallExpr>(coros[k]->name, IrType::Int, 0, 0);
+                call->arguments.push_back(std::make_unique<IrBinaryExpr>(
+                  "-",
+                  std::make_unique<IrVarRef>("h", IrType::Int, 0, 0),
+                  std::make_unique<IrIntConst>(static_cast<int>(k) * CORO_MAX_INSTS,
+                                               0,
+                                               0),
+                  IrType::Int,
+                  0,
+                  0));
+                auto thenBranch = std::make_unique<IrBlockStmt>(0, 0);
+                thenBranch->statements.push_back(
+                  std::make_unique<IrReturnStmt>(std::move(call), 0, 0));
+                auto ifStmt = std::make_unique<IrIfStmt>(std::move(condition),
+                                                         std::move(thenBranch),
+                                                         nullptr,
+                                                         0,
+                                                         0);
+                IrIfStmt* raw = ifStmt.get();
+                if (!chain) {
+                    chain = std::move(ifStmt);
+                } else {
+                    tail->elseBranch = std::move(ifStmt);
+                }
+                tail = raw;
+            }
+            auto fallback = std::make_unique<IrBlockStmt>(0, 0);
+            fallback->statements.push_back(
+              std::make_unique<IrReturnStmt>(std::make_unique<IrIntConst>(0, 0, 0),
+                                             0,
+                                             0));
+            tail->elseBranch = std::move(fallback);
+            resume->body->statements.push_back(std::move(chain));
+            return resume;
+        }
+
+        // __coro_done(h)：按句柄区间读取对应帧的 __done 字段
+        std::unique_ptr<IrFunction> buildCoroDone(const Module& module) {
+            std::vector<const IrFunction*> coros;
+            for (const auto& fn : module.functions) {
+                if (fn->isCoro) {
+                    coros.push_back(fn.get());
+                }
+            }
+            auto done = std::make_unique<IrFunction>();
+            done->name = "__coro_done";
+            done->returnType = IrType::Int;
+            IrParam handle;
+            handle.name = "h";
+            handle.type = IrType::Int;
+            done->params.push_back(std::move(handle));
+            done->body = std::make_unique<IrBlockStmt>(0, 0);
+
+            std::unique_ptr<IrStmt> chain;
+            IrIfStmt* tail = nullptr;
+            for (std::size_t k = 0; k < coros.size(); ++k) {
+                const std::string framesName = "__coro_frames_" + coros[k]->name;
+                const std::string frameTag = "__coro_frame_" + coros[k]->name;
+                auto condition = std::make_unique<IrBinaryExpr>(
+                  "<",
+                  std::make_unique<IrVarRef>("h", IrType::Int, 0, 0),
+                  std::make_unique<IrIntConst>(static_cast<int>(k + 1) * CORO_MAX_INSTS,
+                                               0,
+                                               0),
+                  IrType::Int,
+                  0,
+                  0);
+                auto offset = std::make_unique<IrBinaryExpr>(
+                  "-",
+                  std::make_unique<IrVarRef>("h", IrType::Int, 0, 0),
+                  std::make_unique<IrIntConst>(static_cast<int>(k) * CORO_MAX_INSTS,
+                                               0,
+                                               0),
+                  IrType::Int,
+                  0,
+                  0);
+                auto element = std::make_unique<IrIndexExpr>(
+                  std::make_unique<IrVarRef>(
+                    framesName,
+                    IrType::arrayOf(IrType::structOf(frameTag), CORO_MAX_INSTS),
+                    0,
+                    0),
+                  std::move(offset),
+                  IrType::structOf(frameTag),
+                  0,
+                  0);
+                auto flag = std::make_unique<IrMemberExpr>(std::move(element),
+                                                           "__done",
+                                                           false,
+                                                           IrType::Int,
+                                                           0,
+                                                           0);
+                auto thenBranch = std::make_unique<IrBlockStmt>(0, 0);
+                thenBranch->statements.push_back(
+                  std::make_unique<IrReturnStmt>(std::move(flag), 0, 0));
+                auto ifStmt = std::make_unique<IrIfStmt>(std::move(condition),
+                                                         std::move(thenBranch),
+                                                         nullptr,
+                                                         0,
+                                                         0);
+                IrIfStmt* raw = ifStmt.get();
+                if (!chain) {
+                    chain = std::move(ifStmt);
+                } else {
+                    tail->elseBranch = std::move(ifStmt);
+                }
+                tail = raw;
+            }
+            auto fallback = std::make_unique<IrBlockStmt>(0, 0);
+            fallback->statements.push_back(
+              std::make_unique<IrReturnStmt>(std::make_unique<IrIntConst>(1, 0, 0),
+                                             0,
+                                             0));
+            tail->elseBranch = std::move(fallback);
+            done->body->statements.push_back(std::move(chain));
+            return done;
+        }
+
+        // 变换入口：lower 尾部调用（见 Lowering::run）。返回空 = 成功
+        std::optional<std::string> transformCoroutines(Module& module) {
+            // 前置契约校验（语义层应已拦截）
+            for (const auto& fn : module.functions) {
+                std::string issue = scanCoroContract(*fn);
+                if (!issue.empty()) {
+                    return issue;
+                }
+            }
+
+            try {
+                bool hasCoro = false;
+                // fnid = 遍历序（与 Lowering 第一遍的 m_coroFnids 登记序一致）
+                int fnid = 0;
+                for (auto& fn : module.functions) {
+                    if (!fn->isCoro) {
+                        continue;
+                    }
+                    CoroStateMachine machine(module, *fn, fnid);
+                    machine.run();
+                    ++fnid;
+                    hasCoro = true;
+                }
+                if (hasCoro) {
+                    module.functions.push_back(buildCoroResume(module));
+                    module.functions.push_back(buildCoroDone(module));
+                }
+            } catch (const CoroContractError& error) {
+                return error.message;
+            }
+            return std::nullopt;
+        }
 
         // ---------------------------------------------------------------------------
         // dump
@@ -1875,6 +3090,11 @@ namespace ir {
             case IrStmt::Kind::Continue:
                 out << pad << "continue\n";
                 break;
+            case IrStmt::Kind::Yield: {
+                const auto& yieldStmt = static_cast<const IrYieldStmt&>(stmt);
+                out << pad << "yield " << dumpExpr(*yieldStmt.value) << "\n";
+                break;
+            }
             case IrStmt::Kind::Block: {
                 const auto& block = static_cast<const IrBlockStmt&>(stmt);
                 out << pad << "{\n";

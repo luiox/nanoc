@@ -118,6 +118,9 @@ struct Symbol {
     // 幂等、签名不兼容报 conflicting types）；未被定义覆盖的原型行为同
     // extern（宿主外部符号）
     bool isPrototype = false;
+    // coro 修饰的协程函数（PRD R12）：体内可用 yield；不可被直接调用
+    // （只能经 coro_create 取句柄）；返回类型一期限定 int
+    bool isCoro = false;
 };
 
 // 全局符号摘要（analyze 结果的一部分，供调用方与测试核对符号表内容）。
@@ -283,9 +286,13 @@ private:
     void checkReturn(const ReturnStmt& stmt);
     void checkBreak(const BreakStmt& stmt);
     void checkContinue(const ContinueStmt& stmt);
-    // 追加区（PRD R10/R11；检查入口只在既有分发链尾部追加）
+    // 追加区（PRD R10/R11/R12；检查入口只在既有分发链尾部追加）
     void checkDefer(const DeferStmt& stmt);         // defer 语句（body 须为表达式语句）
     SemanticType checkMatch(const MatchExpr& expr); // match 表达式（R11）
+    void checkYield(const YieldStmt& stmt);         // yield 语句（R12：上下文与互斥检查）
+    // coro 内建（R12）：coro_create(协程名, 实参...) / coro_resume(h) / coro_done(h)
+    SemanticType checkCoroCreate(const CallExpr& expr);
+    SemanticType checkCoroHandleOp(const CallExpr& expr);
 
     SemanticType checkExpr(const Expr& expr);
     SemanticType checkIdentifier(const IdentifierExpr& expr);
@@ -376,6 +383,10 @@ private:
     // defer 体嵌套深度（PRD R10 硬规格）：>0 时再出现 return/break/continue/
     // defer 均为编译错误
     int m_deferDepth = 0;
+    // 每层作用域已注册且未过期的 defer 数（与 m_scopes 栈平行；PRD R12 硬
+    // 约束：yield 挂起时若任何层存在 pending defer（注册点在 yield 之前），
+    // defer 的展开插入点（return/块尾）会被挂起路径绕过 → 编译期拒绝）
+    std::vector<int> m_pendingDefers;
 };
 
 #endif // NCC_SEMANTIC_H

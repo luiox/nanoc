@@ -71,11 +71,13 @@ private:
 
     // 解析函数
     // isExported：由 `export` 前缀传入，只修饰顶层函数与全局变量（PRD R2a）
-    std::unique_ptr<Decl> parseDeclaration(bool isExported = false);
+    // isCoro：由 `coro` 前缀传入，只修饰顶层函数声明（PRD R12）
+    std::unique_ptr<Decl> parseDeclaration(bool isExported = false, bool isCoro = false);
     // 文件顶部 import 指令：`import math;` / `import "util/helpers.nc";`
     ImportDirective parseImportDirective();
     std::unique_ptr<VarDeclaration> parseVarDeclaration();
-    std::unique_ptr<FuncDeclaration> parseFuncDeclaration();
+    // isCoro：`coro` 前缀修饰的协程函数（PRD R12）
+    std::unique_ptr<FuncDeclaration> parseFuncDeclaration(bool isCoro = false);
     // extern 声明（PRD R3）：`extern int puts(char* s);`，仅限文件作用域；
     // 函数体位置必须是 ';'，参数表尾部可带 ...
     std::unique_ptr<FuncDeclaration> parseExternDeclaration();
@@ -126,13 +128,15 @@ private:
     std::unique_ptr<Expr> parsePrimary();
     std::unique_ptr<Expr> parseCall(const std::string& callee);
 
-    // 追加区（PRD R10/R11；解析入口只在语句/表达式的既有分发链尾部追加）
+    // 追加区（PRD R10/R11/R12；解析入口只在语句/表达式的既有分发链尾部追加）
     // defer 语句：`defer <语句>;`（语义期限定为表达式语句）
     std::unique_ptr<Stmt> parseDeferStatement();
     // match 表达式：`match (subject) { patterns => body, ... }`（PRD R11）
     std::unique_ptr<Expr> parseMatchExpression();
     // match 单个模式：常量/区间/通配/守卫（PRD R11）
     std::unique_ptr<MatchPattern> parseMatchPattern();
+    // yield 语句：`yield <表达式>;`（PRD R12，仅在 coro 函数体内合法——语义层裁决）
+    std::unique_ptr<Stmt> parseYieldStatement();
 
     // 错误处理：抛 ParseError（位置取当前 token）
     void error(const std::string& message);

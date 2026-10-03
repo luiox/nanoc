@@ -101,19 +101,29 @@ std::string CodeGenerator::generate(const ir::Module& module,
     m_tempLimit = 0;
     m_sink = &m_code;
 
-    // linkage 缺省 = 单文件模式（全部条目 file 空、未导出）；显式给出时必须
-    // 与 IR 模块对齐（buildLinkageTable 的位置对齐契约，见 LinkageEntry 注释）
-    LinkageTable fallback;
+    // linkage 缺省 = 单文件模式（全部条目 file 空、未导出）；显式给出时长度
+    // 不得超过 IR 模块（buildLinkageTable 的位置对齐契约，见 LinkageEntry 注释）。
+    // R12 coro 变换在 lower 尾部追加注入函数（__coro_resume/__coro_done）与帧
+    // 全局，尾部缺失的条目按默认值（file 空、未导出）补齐
+    LinkageTable aligned;
+    aligned.functions.resize(module.functions.size());
+    aligned.globals.resize(module.globals.size());
+    LinkageTable defaultTable = aligned;
     if (linkage == nullptr) {
-        fallback.functions.resize(module.functions.size());
-        fallback.globals.resize(module.globals.size());
-        linkage = &fallback;
+        linkage = &defaultTable;
     }
-    if (linkage->functions.size() != module.functions.size()
-        || linkage->globals.size() != module.globals.size()) {
+    if (linkage->functions.size() > module.functions.size()
+        || linkage->globals.size() > module.globals.size()) {
         throw std::runtime_error(
           "internal error: linkage table is not aligned with the IR module");
     }
+    for (size_t i = 0; i < linkage->functions.size(); ++i) {
+        aligned.functions[i] = linkage->functions[i];
+    }
+    for (size_t i = 0; i < linkage->globals.size(); ++i) {
+        aligned.globals[i] = linkage->globals[i];
+    }
+    linkage = &aligned;
 
     // 第一遍之一：struct 布局（声明序，与 semantic 同规则）
     for (const auto& def : module.structs) {
@@ -1192,6 +1202,11 @@ void CodeGenerator::generateStmt(const ir::IrStmt& stmt) {
         }
         emit("    jmp " + m_continueLabels.back());
         break;
+    case Kind::Yield:
+        // R12 coro：状态机变换保证后端不见 yield 点（PRD R12）；到达即
+        // 变换被跳过的内部契约破坏
+        throw std::runtime_error(
+          "internal error: yield statement reached the NAS backend");
     }
 }
 

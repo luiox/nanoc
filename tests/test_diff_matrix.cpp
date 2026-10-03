@@ -393,6 +393,65 @@ int main() {
 )nc",
                              140 });
 
+        // 特性：R12 coro/yield（M6）——协程迭代器与双协程交错。coro 在 IR 层
+        // 状态机变换降解（决策 A2），三后端免费继承；锚点 [0,255] 手工核算
+        programs.push_back({ "feature/coro_iterator",
+                             "feature_coro_iterator",
+                             R"nc(coro int gen(int n) {
+    for (int i = 0; i < n; i = i + 1) {
+        yield i * i;
+    }
+    return -1;
+}
+
+int main() {
+    int h = coro_create(gen, 5);
+    int sum = 0;
+    int v = coro_resume(h);
+    while (v >= 0) {
+        sum = sum + v;
+        v = coro_resume(h);
+    }
+    return sum;
+}
+)nc",
+                             30 });
+
+        programs.push_back({ "feature/coro_two_interleave",
+                             "feature_coro_two_interleave",
+                             R"nc(coro int letters() {
+    yield 1;
+    yield 2;
+    return 10;
+}
+
+coro int digits(int base) {
+    yield base;
+    return base + 20;
+}
+
+int main() {
+    int ha = coro_create(letters);
+    int hb = coro_create(digits, 4);
+    int r = coro_resume(ha) * 1000;
+    r = r + coro_resume(hb) * 100;
+    r = r + coro_resume(ha) * 10;
+    r = r + coro_resume(hb);
+    if (r != 1444) {
+        return 200;
+    }
+    int a3 = coro_resume(ha);
+    if (a3 != 10) {
+        return 202;
+    }
+    if (coro_done(ha) != 1 || coro_done(hb) != 1) {
+        return 201;
+    }
+    return 45;
+}
+)nc",
+                             45 });
+
         return programs;
     }
 
@@ -554,6 +613,12 @@ TEST(DiffMatrixTest, Feature_StructPointerArray) {
 
 TEST(DiffMatrixTest, Feature_GlobalsCharsStrings) {
     assertProgram("feature/globals_chars_strings");
+}
+
+TEST(DiffMatrixTest, Feature_CoroIterator) { assertProgram("feature/coro_iterator"); }
+
+TEST(DiffMatrixTest, Feature_CoroTwoInterleave) {
+    assertProgram("feature/coro_two_interleave");
 }
 
 // ---------------------------------------------------------------------------
