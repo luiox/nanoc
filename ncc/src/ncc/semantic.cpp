@@ -594,6 +594,34 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
     declareGlobal(symbol);
 }
 
+// 变量声明类型的可用性检查（全局/局部共用）：void 类型与 incomplete struct
+// 值（含数组元素）报错
+void SemanticAnalyzer::checkDeclValueType(const SemanticType& declared,
+                                          const std::string& declName,
+                                          int line,
+                                          int column) {
+    if (declared.kind == SemanticType::Kind::Void) {
+        reportError(line, column, "variable '" + declName + "' cannot have void type");
+    }
+    // incomplete struct 值（含数组元素）不可实例化
+    bool incompleteValue = false;
+    if (declared.kind == SemanticType::Kind::Struct) {
+        incompleteValue = !isCompleteStruct(declared.tag);
+    } else if (declared.kind == SemanticType::Kind::Array
+               && declared.element->kind == SemanticType::Kind::Struct) {
+        incompleteValue = !isCompleteStruct(declared.element->tag);
+    }
+    if (incompleteValue) {
+        const std::string& tag = declared.kind == SemanticType::Kind::Struct
+                                   ? declared.tag
+                                   : declared.element->tag;
+        reportError(line,
+                    column,
+                    "variable '" + declName + "' has incomplete type 'struct " + tag
+                      + "'");
+    }
+}
+
 void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
     // match 是语句化表达式（lower 层降解为 If 链），只能出现在函数体内的
     // 语句位置；全局初始化器没有语句边界，显式拒绝（含嵌套子表达式）
@@ -612,28 +640,7 @@ void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
                                          decl.line,
                                          decl.column,
                                          true);
-    if (declared.kind == SemanticType::Kind::Void) {
-        reportError(decl.line,
-                    decl.column,
-                    "variable '" + decl.name + "' cannot have void type");
-    }
-    // incomplete struct 值（含数组元素）不可实例化
-    bool incompleteValue = false;
-    if (declared.kind == SemanticType::Kind::Struct) {
-        incompleteValue = !isCompleteStruct(declared.tag);
-    } else if (declared.kind == SemanticType::Kind::Array
-               && declared.element->kind == SemanticType::Kind::Struct) {
-        incompleteValue = !isCompleteStruct(declared.element->tag);
-    }
-    if (incompleteValue) {
-        const std::string& tag = declared.kind == SemanticType::Kind::Struct
-                                   ? declared.tag
-                                   : declared.element->tag;
-        reportError(decl.line,
-                    decl.column,
-                    "variable '" + decl.name + "' has incomplete type 'struct " + tag
-                      + "'");
-    }
+    checkDeclValueType(declared, decl.name, decl.line, decl.column);
     Symbol symbol;
     symbol.kind = SymbolKind::Variable;
     symbol.name = decl.name;
@@ -723,27 +730,7 @@ void SemanticAnalyzer::checkLocalVariable(const StmtVarDeclaration& decl) {
                                          decl.line,
                                          decl.column,
                                          true);
-    if (declared.kind == SemanticType::Kind::Void) {
-        reportError(decl.line,
-                    decl.column,
-                    "variable '" + decl.name + "' cannot have void type");
-    }
-    bool incompleteValue = false;
-    if (declared.kind == SemanticType::Kind::Struct) {
-        incompleteValue = !isCompleteStruct(declared.tag);
-    } else if (declared.kind == SemanticType::Kind::Array
-               && declared.element->kind == SemanticType::Kind::Struct) {
-        incompleteValue = !isCompleteStruct(declared.element->tag);
-    }
-    if (incompleteValue) {
-        const std::string& tag = declared.kind == SemanticType::Kind::Struct
-                                   ? declared.tag
-                                   : declared.element->tag;
-        reportError(decl.line,
-                    decl.column,
-                    "variable '" + decl.name + "' has incomplete type 'struct " + tag
-                      + "'");
-    }
+    checkDeclValueType(declared, decl.name, decl.line, decl.column);
     Symbol symbol;
     symbol.kind = SymbolKind::Variable;
     symbol.name = decl.name;
