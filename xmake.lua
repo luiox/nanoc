@@ -44,6 +44,7 @@ target("tests")
     add_includedirs("nvm/src")
     add_includedirs("nas/src")
     add_includedirs("ncc/src")
+    add_includedirs("tests") -- tests 模块 include root：support/ 头按模块前缀引用
     add_files("tests/**.cpp")
     add_files("nvm/src/nvm/core.cpp")
     add_files("nvm/src/nvm/handlers/**.cpp")
