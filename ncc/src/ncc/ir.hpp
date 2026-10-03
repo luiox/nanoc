@@ -383,6 +383,16 @@ namespace ir {
         std::unique_ptr<IrBlockStmt> body;
     };
 
+    // extern 声明（PRD R3）：宿主提供的 C 函数签名。不进入 functions（无函数
+    // 体、不发射定义），后端据其发射外部调用：NAS 侧 `extern 符号` 指令 +
+    // varargs 的 cdecl 调用序列；C 侧带签名原型
+    struct IrExternDecl {
+        std::string name;
+        IrType returnType;
+        std::vector<IrParam> params;
+        bool isVariadic = false;
+    };
+
     // ---------------------------------------------------------------------------
     // IR 模块 + 降级器 + dump
     // ---------------------------------------------------------------------------
@@ -391,6 +401,7 @@ namespace ir {
         std::vector<IrTypedef> typedefs;                    // 声明序
         std::vector<IrGlobal> globals;                      // 声明序（"先声明后可见"）
         std::vector<std::unique_ptr<IrFunction>> functions; // 声明序
+        std::vector<IrExternDecl> externs; // extern 声明序（PRD R3，按名去重）
 
         // 文本输出：缩进分层，每个表达式带类型注记（dump 样例见 test_ir.cpp 黄金）
         std::string dump() const;

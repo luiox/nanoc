@@ -145,6 +145,10 @@ private:
     std::vector<GlobalInit> m_globalInits; // 进入 main 后统一执行
     std::vector<std::string> m_externs;    // 未定义的被调函数 → 宿主符号（callx）
     std::set<std::string> m_externSet;
+    // extern 声明（PRD R3）：varargs 标记（cdecl 调用序列判定）与返回类型名
+    // （调用点返回值类型；未声明外部兜底 int，保持 #37 兼容路径）
+    std::set<std::string> m_variadicExterns;
+    std::map<std::string, std::string> m_externReturnTypes;
     std::map<std::string, std::string> m_stringLiterals; // 字面量内容 → 数据标号（去重）
 
     // 当前函数的 struct 返回信息（sret 方案）
@@ -172,6 +176,8 @@ private:
     std::string modulePrefix(const std::string& file);
     // 调用点函数解析：当前文件定义优先，其次导出定义；未命中 = 宿主外部符号
     const FunctionEntry* resolveFunction(const std::string& name) const;
+    // extern 声明的返回类型名（未声明外部返回 "int"，保持既有未解析外部行为）
+    std::string externReturnTypeName(const std::string& name) const;
     // 全局变量的存储键（跨文件私有同名共存）
     static std::string
     globalKey(const std::string& name, const std::string& file, bool isExported);
