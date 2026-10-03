@@ -3,13 +3,13 @@
 ## Project Overview
 
 NanoC is a simple C-like language with one shared frontend/IR and three backends
-(NAS/VM, C, LLVM-in-progress). The project consists of:
-- **ncc/** - NanoC compiler (lexer, parser, AST, semantic, IR, NAS/C backends, multi-file loading)
+(NAS/VM, C, LLVM). The project consists of:
+- **ncc/** - NanoC compiler (lexer, parser, AST, semantic, IR, preprocessor, NAS/C/LLVM backends, multi-file loading)
 - **nvm/** - Virtual machine runtime (loader, host-function dispatch, `--host-lib` dynamic linking)
 - **nas/** - Assembler + NCI v2.1 linker (`nas -r`)
-- **rules/nanoc/** - xmake `rule("nanoc")` for building `.nc` sources
-- **tests/** - GoogleTest-based test suite (incl. R13 differential matrix)
-- **examples/** - Sample NanoC programs + hello_project xmake sample
+- **rules/nanoc/** - xmake `rule("nanoc")` + `toolchain("nanoc")` + `ncc-separate` driver for building `.nc` sources
+- **tests/** - GoogleTest-based test suite (incl. R13 differential matrix, vm/c/llvm)
+- **examples/** - Sample NanoC programs + hello_project / toolchain_project xmake samples
 
 ---
 
@@ -18,7 +18,10 @@ NanoC is a simple C-like language with one shared frontend/IR and three backends
 ### Prerequisites
 - Xmake v3.0.0+
 - C++17 compatible compiler (MSVC, GCC, Clang)
-- Dependencies: gtest, spdlog (auto-installed by xmake)
+- Dependencies: gtest, spdlog, libca (auto-installed by xmake)
+- Optional: LLVM toolchain (`llc` + lld-link/clang) for the `--emit=obj|exe`
+  backends and the llvm diff column — probe order `NANOC_LLVM_DIR` > `llc` on
+  PATH; the diff column SKIPs (not fails) when absent
 
 ### Build Commands
 
@@ -242,15 +245,17 @@ library), but the C interop rules still apply if `.c` files are added:
 NanoC/
 ├── ncc/           # Compiler source — layout: <module>/src/<module>/ (module-prefixed includes)
 │   └── src/ncc/
-│       ├── lexer.hpp/.cpp      # Tokenizer
-│       ├── parser.hpp/.cpp     # AST parser（多文件 import/export、extern 声明）
+│       ├── lexer.hpp/.cpp      # Tokenizer（含 defer/match 关键字）
+│       ├── parser.hpp/.cpp     # AST parser（多文件 import/export、extern 声明、defer/match、头文件模式）
 │       ├── ast.hpp/.cpp        # AST node definitions
 │       ├── semantic.hpp/.cpp   # 语义分析（作用域栈/类型检查/file:line:col 诊断）
-│       ├── ir.hpp/.cpp         # IR 数据模型与 AST 降级器（非 SSA，可 --dump-ir）
+│       ├── ir.hpp/.cpp         # IR 数据模型与 AST 降级器（非 SSA，可 --dump-ir；defer 展开/match 降解）
 │       ├── codegen.hpp/.cpp    # NAS 后端：ir::Module → 文本汇编
 │       ├── c_backend.hpp/.cpp  # C 后端：ir::Module → 可读 C（--emit=c）
-│       ├── loader.hpp          # 多文件装载（import 闭包，header-only）
-│       └── main.cpp            # CLI entry point（libca opt：--emit=asm|c、-o、-MMD/-MF）
+│       ├── llvm_backend.hpp/.cpp # LLVM 后端：ir::Module → 文本 .ll；--emit=llvm|obj|exe（NANOC_LLVM_DIR 探测）
+│       ├── preprocessor.hpp/.cpp # R9 #include 预处理（引号 include 递归展开、guard/对象宏识别）
+│       ├── loader.hpp          # 多文件装载（import 闭包 + R9 头文件段合并；loadStandalone 独立编译轻装载，header-only）
+│       └── main.cpp            # CLI entry point（libca opt：--emit=asm|c|llvm|obj|exe、-o、-MMD/-MF、--dump-ir）
 ├── nvm/           # Virtual machine
 │   └── src/nvm/
 │       ├── core.hpp/.cpp       # VM implementation（加载器/宿主分发/--host-lib 动态链接）
@@ -263,7 +268,8 @@ NanoC/
 │       ├── instruction.hpp/.cpp  # Instruction parsing & encoding
 │       ├── linker.hpp/.cpp       # NCI v2.1 链接器（nas -r：段合并/重定位/符号解析）
 │       └── main.cpp              # Assembler entry（-r 链接模式）
-├── rules/nanoc/   # xmake rule("nanoc")：.nc → ncc --emit=c → 内置 C 工具链（样例见 examples/hello_project）
+├── rules/nanoc/   # xmake 接入：nanoc.lua（rule 一期形态）+ toolchain.lua（toolchain 正式形态）
+│   └── driver/                    # ncc-separate 独立编译驱动（R7 loadStandalone 的 CLI 接线）
 ├── tests/         # GoogleTest tests（include root = tests/，support/ 头按模块前缀引用）
 │   ├── test_main.cpp            # Test runner
 │   ├── support/                 # 差分测试共用 harness（diff_harness.hpp/.cpp）
@@ -271,7 +277,11 @@ NanoC/
 │   ├── test_ir.cpp / test_ir_codegen.cpp         # IR 模型与降级器
 │   ├── test_codegen.cpp / test_codegen_bridge.cpp / test_codegen_e2e.cpp
 │   ├── test_c_backend.cpp       # C 后端 emit 与 C/VM 差分
+│   ├── test_llvm_backend.cpp    # LLVM 后端黄金片段与真编译差分
 │   ├── test_extern.cpp / test_multifile.cpp      # extern 声明（含 msvcrt 真宿主 e2e）/ 多文件
+│   ├── test_defer_match.cpp     # M5 defer/match（语义/IR/VM/三后端差分）
+│   ├── test_include_headers.cpp # M7 #include 头文件（正例/负例/语义/e2e 差分）
+│   ├── test_separate.cpp        # R7 独立编译 loadStandalone
 │   ├── test_vm.cpp              # VM 执行级用例
 │   ├── test_instructions.cpp    # 指令编码断言（Assembler::parseLine）
 │   ├── test_assembler.cpp / test_assembler_v21.cpp  # 汇编器与 v2.1 目标格式字节级用例
@@ -280,12 +290,12 @@ NanoC/
 │   ├── test_hostlib.cpp         # --host-lib 宿主库用例
 │   ├── test_golden_e2e.cpp      # examples 全工具链黄金 e2e
 │   ├── test_integration_e2e.cpp # 汇编→加载→宿主调用全链路 e2e
-│   ├── test_diff_matrix.cpp     # R13 差分矩阵（程序 × 后端）
+│   ├── test_diff_matrix.cpp     # R13 差分矩阵（程序 × vm/c/llvm 后端）
 │   └── test_libca.cpp           # libca smoke test
-├── examples/      # Sample .nc programs（hello_project/ 为 xmake rule 样例工程）
+├── examples/      # Sample .nc programs（hello_project/ rule 样例、toolchain_project/ toolchain 样例）
 ├── test/          # Legacy test files (.nas, .nca)
-├── doc/           # 设计文档与规范（NCI v2.1 权威规范、PRD 多后端路线图、开发计划）
-├── .github/workflows/ci.yml  # CI：windows-latest + xmake 构建与回归
+├── doc/           # 设计文档与规范（NCI v2.1 权威规范、PRD 多后端路线图、xmake rule/toolchain 指南、开发计划）
+├── .github/workflows/ci.yml  # CI：windows-latest + xmake 构建 + 全量测试（含 LLVM 工具链安装与 llvm 差分列）
 ├── xmake.lua      # Build configuration（含 MSVC /utf-8 全局标志）
 ├── .clang-format  # Formatting (root=GNU for nvm/nas; ncc/tests/examples=K&R sub-configs)
 └── README.md
@@ -323,17 +333,21 @@ EXPECT_EQ(token.kind, expected);  // Log failure but continue
 ### Differential Testing (R13 Matrix)
 
 - `test_diff_matrix.cpp` + `tests/support/diff_harness.hpp/.cpp` run a
-  **program set × backend matrix** (examples + feature cases × vm/c) asserting the
+  **program set × backend matrix** (examples + feature cases × vm/c/llvm) asserting the
   same program produces the same observable exit code on every available backend.
+  The LLVM column uses the same `IDiffBackend` interface (probe `NANOC_LLVM_DIR`
+  > `llc` on PATH; `.ll` → `llc -filetype=obj` → lld-link/clang link).
 - Mapping convention: VM main return = R0 (int32_t); the C backend's exit code is
   compared as `& 0xFF`. Keep matrix-program `main` return values in `[0, 255]` so the
   mapping stays injective (255-truncation boundary).
-- Anchor assertions: known programs additionally assert the raw VM R0, so the two
+- Anchor assertions: known programs additionally assert the raw VM R0, so the
   backends cannot be "consistently wrong".
 - **Skip policy**: backend availability is probed at runtime — the C compiler probe is
   `NANOC_C_COMPILER` env var > `clang` on PATH > `gcc` on PATH; when fewer than 2
-  executable backends exist the row is `GTEST_SKIP` (marked skip, not failure). The
-  future LLVM column (R6) follows the same probe-and-skip pattern.
+  executable backends exist the row is `GTEST_SKIP` (marked skip, not failure).
+- Feature rows that need their own programs (e.g. defer/match in
+  `test_defer_match.cpp`) reuse the same harness via `runRow` instead of adding
+  matrix columns.
 - When adding a language feature, add its .nc case to the matrix (and to
   `test_golden_e2e.cpp` anchors when applicable).
 
@@ -346,7 +360,8 @@ EXPECT_EQ(token.kind, expected);  // Log failure but continue
 3. **Build tests**: `xmake build tests`
 4. **Run tests**: `xmake run tests` (or use filter for specific tests)
 5. **Build project**: `xmake build`
-6. **Test manually**: Compile a `.nc` file and run on VM
+6. **Test manually**: Compile a `.nc` file and run on VM（多模块用 `nas -r` 链接；
+   或 `--emit=c|llvm|obj|exe` 产出原生可执行文件）
 
 ### Common Issues
 
@@ -393,6 +408,11 @@ No `.cursorrules`, `.cursor/rules/`, or `.github/copilot-instructions.md` files 
 | Build compiler | `xmake build ncc` |
 | Run tests | `xmake run tests` |
 | Run single test | `xmake run tests --gtest_filter=TestName.*` |
+| Compile to VM assembly | `xmake run ncc file.nc -o file.nas` |
+| Assemble | `xmake run nas file.nas file.nci` |
+| Link NCI objects | `xmake run nas -r a.nci b.nci -o app.nci` |
+| Run on VM | `xmake run nvm file.nci [--host-lib <dll>]` |
+| Native backends | `xmake run ncc file.nc --emit=c\|llvm\|obj\|exe` |
 | Format code | `xmake format` |
 | Clean build | `xmake clean` |
 | Release build | `xmake f -m release && xmake` |

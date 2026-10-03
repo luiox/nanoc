@@ -3,14 +3,22 @@
 ## 工具链流水线
 
 ```
-.nc 源码 ──(ncc)──> .nas 汇编 ──(nas)──> .nci 字节码 ──(nvm)──> 执行
+                 ┌─ B0 NAS 后端 ──> .nas ──(nas)──> .nci ──(nvm)──> VM 执行
+.nc 源码 ──ncc──>├─ B1 C 后端   ──> .c ──(cl/clang/gcc)──> 原生 exe
+（前端+IR）       └─ B2 LLVM 后端 ─> .ll ──(llc/lld-link)──> .obj / 原生 exe
 ```
+
+三个后端共享同一前端与 IR（`ncc --emit=asm|c|llvm|obj|exe` 选择发射目标），
+跨后端一致性由差分测试矩阵保证（`tests/test_diff_matrix.cpp`，PRD R13）。
 
 ## 文件格式
 
 ### .nc（Nano C 源文件）
 
-纯文本的 Nano C 源代码（C 语言子集），由 ncc 编译。
+纯文本的 Nano C 源代码（C 语言子集），由 ncc 编译。语言面覆盖：基础语句/
+表达式与控制流、函数、字符串字面量、指针/一维数组、`struct`/`typedef`、
+多文件模块 `import`/`export`、`extern` 声明、`#include` C 头文件声明子集、
+`defer` 语句与 `match` 表达式（协程 `coro`/`yield` 开发中）。
 
 ### .nas（NanoC 汇编文件）
 
@@ -29,13 +37,19 @@
 
 ### ncc（Nano C Compiler）
 
-把 .nc 编译为 .nas 汇编文本。支持多文件按序编译、`-o` 自定义输出、
-`-MMD`/`-MF` 依赖文件生成；多后端（c/llvm/obj/exe）在 CLI 层预留。
+前端：词法/语法分析 → AST → 语义分析 → IR（`--dump-ir` 可查看）；三后端按
+`--emit` 选择发射：`asm`（.nas 汇编文本，缺省）、`c`（可读 C，差分 oracle）、
+`llvm`（文本 .ll）与 `obj`/`exe`（经 llc + lld-link/clang 产出目标文件/原生
+exe，需 LLVM 工具链，`NANOC_LLVM_DIR` 探测）。支持多文件按序编译（import
+闭包装载 + `#include` 预处理）、`-o` 自定义输出、`-MMD`/`-MF` 依赖文件生成、
+`--dump-ir`、`--version`。
 
 ### nas（NanoC Assembler）
 
 把 .nas 两遍扫描汇编为 .nci：第一遍收集标号/符号表并线性编码，
 第二遍回填标号地址与 CALLX 导入地址，产出完整 v2.1 目标文件。
+`nas -r` 链接多个 .nci 目标文件：段合并、地址重定位、跨模块导入/导出
+按符号名解析（见《Bytecode Format Specification v2.1》§2.2）。
 
 ### nvm（NanoC Virtual Machine）
 
