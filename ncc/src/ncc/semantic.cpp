@@ -4,6 +4,13 @@
 #include <sstream>
 #include <utility>
 
+// 条件上下文可用的类型：标量/指针/NULL（非零为真）
+static bool isConditionType(SemanticType type) {
+    return type == SemanticType::Int || type == SemanticType::Char
+           || type == SemanticType::IntPtr || type == SemanticType::CharPtr
+           || type == SemanticType::Null;
+}
+
 // ---------------------------------------------------------------------------
 // 诊断与结果
 // ---------------------------------------------------------------------------
@@ -138,11 +145,27 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
     Symbol symbol;
     symbol.kind = SymbolKind::Function;
     symbol.name = decl.name;
-    symbol.type = typeFromName(decl.returnType);
+    // 返回类型在此处唯一校验（void* 等），诊断落在函数声明位置
+    symbol.type = declaredType(decl.returnType,
+                               decl.returnPointerDepth,
+                               false,
+                               0,
+                               0,
+                               decl.line,
+                               decl.column,
+                               true);
     symbol.line = decl.line;
     symbol.column = decl.column;
     for (const auto& param : decl.parameters) {
-        symbol.paramTypes.add(typeFromName(param->type));
+        // 参数类型的诊断在 checkFunctionBody 中统一报告，此处静默计算
+        symbol.paramTypes.add(declaredType(param->type,
+                                           param->pointerDepth,
+                                           param->isArray,
+                                           param->arraySize,
+                                           param->arrayDims,
+                                           param->line,
+                                           param->column,
+                                           false));
     }
     if (declareFunction(symbol)) {
         appendGlobalSummary(symbol);
@@ -150,8 +173,16 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
 }
 
 void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
-    SemanticType declared = typeFromName(decl.type);
-    if (declared == SemanticType::Void) {
+    SemanticType declared = declaredType(decl.type,
+                                         decl.pointerDepth,
+                                         decl.isArray,
+                                         decl.arraySize,
+                                         decl.arrayDims,
+                                         decl.line,
+                                         decl.column,
+                                         true);
+    if (typeFromName(decl.type) == SemanticType::Void && decl.pointerDepth == 0
+        && !decl.isArray) {
         reportError(decl.line,
                     decl.column,
                     "variable '" + decl.name + "' cannot have void type");
@@ -181,8 +212,16 @@ void SemanticAnalyzer::checkFunctionBody(const FuncDeclaration& decl) {
 
     // 参数登记在函数作用域内；解析器目前给参数记录的是函数的位置
     for (const auto& param : decl.parameters) {
-        SemanticType paramType = typeFromName(param->type);
-        if (paramType == SemanticType::Void) {
+        SemanticType paramType = declaredType(param->type,
+                                              param->pointerDepth,
+                                              param->isArray,
+                                              param->arraySize,
+                                              param->arrayDims,
+                                              param->line,
+                                              param->column,
+                                              true);
+        if (typeFromName(param->type) == SemanticType::Void && param->pointerDepth == 0
+            && !param->isArray) {
             reportError(param->line,
                         param->column,
                         "parameter '" + param->name + "' cannot have void type");
@@ -216,8 +255,16 @@ void SemanticAnalyzer::checkFunctionBody(const FuncDeclaration& decl) {
 }
 
 void SemanticAnalyzer::checkLocalVariable(const StmtVarDeclaration& decl) {
-    SemanticType declared = typeFromName(decl.type);
-    if (declared == SemanticType::Void) {
+    SemanticType declared = declaredType(decl.type,
+                                         decl.pointerDepth,
+                                         decl.isArray,
+                                         decl.arraySize,
+                                         decl.arrayDims,
+                                         decl.line,
+                                         decl.column,
+                                         true);
+    if (typeFromName(decl.type) == SemanticType::Void && decl.pointerDepth == 0
+        && !decl.isArray) {
         reportError(decl.line,
                     decl.column,
                     "variable '" + decl.name + "' cannot have void type");
@@ -334,7 +381,15 @@ void SemanticAnalyzer::checkReturn(const ReturnStmt& stmt) {
     if (m_currentFunction == nullptr) {
         return;
     }
-    SemanticType returnType = typeFromName(m_currentFunction->returnType);
+    // 返回类型已在 registerFunctionSignature 中校验，此处静默重算
+    const SemanticType returnType = declaredType(m_currentFunction->returnType,
+                                                 m_currentFunction->returnPointerDepth,
+                                                 false,
+                                                 0,
+                                                 0,
+                                                 stmt.line,
+                                                 stmt.column,
+                                                 false);
     if (stmt.value != nullptr) {
         if (returnType == SemanticType::Void) {
             reportError(stmt.line,
@@ -385,10 +440,16 @@ SemanticType SemanticAnalyzer::checkExpr(const Expr& expr) {
         return checkCall(static_cast<const CallExpr&>(expr));
     case ASTNodeType::IDENTIFIER_EXPR:
         return checkIdentifier(static_cast<const IdentifierExpr&>(expr));
+    case ASTNodeType::INDEX_EXPR:
+        return checkIndex(static_cast<const IndexExpr&>(expr));
     case ASTNodeType::INTEGER_LITERAL:
         return SemanticType::Int;
     case ASTNodeType::CHAR_LITERAL:
         return SemanticType::Char;
+    case ASTNodeType::STRING_LITERAL:
+        return SemanticType::CharPtr; // 字符串字面量：数据段常量的地址
+    case ASTNodeType::NULL_LITERAL:
+        return SemanticType::Null;
     default:
         return SemanticType::Error; // 不可达：表达式节点类型已穷举
     }
@@ -415,26 +476,53 @@ SemanticType SemanticAnalyzer::checkIdentifier(const IdentifierExpr& expr) {
 SemanticType SemanticAnalyzer::checkAssign(const AssignExpr& expr) {
     // 先检查右侧表达式，尽量多收集错误
     SemanticType valueType = checkExpr(*expr.value);
-    const Symbol* symbol = lookupSymbol(expr.name);
-    if (symbol == nullptr) {
-        reportError(expr.line,
-                    expr.column,
-                    "use of undeclared identifier '" + expr.name + "'");
-        return SemanticType::Error;
+    SemanticType targetType = SemanticType::Error;
+    std::string context = "assignment";
+
+    switch (expr.target->type) {
+    case ASTNodeType::IDENTIFIER_EXPR: {
+        const auto& ident = static_cast<const IdentifierExpr&>(*expr.target);
+        context = "assignment to '" + ident.name + "'";
+        const Symbol* symbol = lookupSymbol(ident.name);
+        if (symbol == nullptr) {
+            reportError(ident.line,
+                        ident.column,
+                        "use of undeclared identifier '" + ident.name + "'");
+            break;
+        }
+        if (symbol->kind == SymbolKind::Function) {
+            reportError(ident.line,
+                        ident.column,
+                        "cannot assign to function '" + ident.name + "'");
+            break;
+        }
+        if (isArrayType(symbol->type)) {
+            // 数组整体赋值不支持（PRD R1.2）：数组不是可拷贝的左值
+            reportError(ident.line,
+                        ident.column,
+                        "cannot assign to array '" + ident.name
+                          + "' (arrays are not copyable)");
+            break;
+        }
+        targetType = symbol->type;
+        break;
     }
-    if (symbol->kind == SymbolKind::Function) {
-        reportError(expr.line,
-                    expr.column,
-                    "cannot assign to function '" + expr.name + "'");
-        return SemanticType::Error;
+    case ASTNodeType::INDEX_EXPR:
+        // a[i] = v / p[i] = v：下标检查给出元素类型（内部已报告下标错误）
+        targetType = checkIndex(static_cast<const IndexExpr&>(*expr.target));
+        break;
+    case ASTNodeType::UNARY_EXPR:
+        // *p = v：解引用检查给出逐引用类型
+        targetType = checkUnary(static_cast<const UnaryExpr&>(*expr.target));
+        break;
+    default:
+        reportError(expr.line, expr.column, "expression is not assignable");
+        break;
     }
-    checkConversion(valueType,
-                    symbol->type,
-                    expr.line,
-                    expr.column,
-                    "assignment to '" + expr.name + "'");
+
+    checkConversion(valueType, targetType, expr.line, expr.column, context);
     // 赋值表达式的值类型 = 左值类型（读回的是赋值后的左值）
-    return symbol->type;
+    return targetType;
 }
 
 SemanticType SemanticAnalyzer::checkBinary(const BinaryExpr& expr) {
@@ -444,29 +532,217 @@ SemanticType SemanticAnalyzer::checkBinary(const BinaryExpr& expr) {
     if (left == SemanticType::Error || right == SemanticType::Error) {
         return SemanticType::Error; // 操作数已报错，抑制级联
     }
-    if (!isScalar(left) || !isScalar(right)) {
-        // 目前唯一的非标量来源是 void 表达式（void 函数调用的结果）
-        reportError(expr.line,
-                    expr.column,
-                    "invalid operands to binary '" + expr.op + "'");
+    const std::string& op = expr.op;
+
+    // 比较：标量之间（char 提升）；同类型指针之间；指针与 NULL 之间
+    if (op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=") {
+        SemanticType l = decayed(left);
+        SemanticType r = decayed(right);
+        if (isScalar(l) && isScalar(r)) {
+            return SemanticType::Int;
+        }
+        if (l == r && (isPointer(l) || l == SemanticType::Null)) {
+            return SemanticType::Int;
+        }
+        // 指针与 NULL 比较合法
+        if ((isPointer(l) && r == SemanticType::Null)
+            || (l == SemanticType::Null && isPointer(r))) {
+            return SemanticType::Int;
+        }
+        if ((isPointer(l) || l == SemanticType::Null)
+            && (isPointer(r) || r == SemanticType::Null)) {
+            reportError(expr.line,
+                        expr.column,
+                        "comparison between distinct pointer types '" + typeName(left)
+                          + "' and '" + typeName(right) + "'");
+            return SemanticType::Error;
+        }
+        reportError(expr.line, expr.column, "invalid operands to binary '" + op + "'");
         return SemanticType::Error;
     }
-    // 算术/比较/逻辑运算统一规则：char 操作数先提升为 int，结果一律 int
-    // （比较与逻辑运算的结果是 0/1）
-    return SemanticType::Int;
+
+    // 逻辑运算：操作数为可判真伪的类型（标量/指针/NULL，非零为真）
+    if (op == "&&" || op == "||") {
+        SemanticType l = decayed(left);
+        SemanticType r = decayed(right);
+        if (!isConditionType(l) || !isConditionType(r)) {
+            reportError(expr.line,
+                        expr.column,
+                        "invalid operands to binary '" + op + "'");
+            return SemanticType::Error;
+        }
+        return SemanticType::Int;
+    }
+
+    // 算术运算（数组名在此退化为指针参与运算）
+    SemanticType l = decayed(left);
+    SemanticType r = decayed(right);
+
+    if (op == "+" || op == "-") {
+        // 标量算术：char 提升，结果 int
+        if (isScalar(l) && isScalar(r)) {
+            return SemanticType::Int;
+        }
+        // 指针 ± 整数：按指向类型大小缩放（当前全部 4 字节）
+        if (op == "+" && isPointer(l) && isScalar(r)) {
+            return l;
+        }
+        if (op == "+" && isScalar(l) && isPointer(r)) {
+            return r;
+        }
+        if (op == "-" && isPointer(l) && isScalar(r)) {
+            return l;
+        }
+        if (op == "-" && isPointer(l) && isPointer(r)) {
+            reportError(expr.line, expr.column, "pointer subtraction is not supported");
+            return SemanticType::Error;
+        }
+        reportError(expr.line, expr.column, "invalid operands to binary '" + op + "'");
+        return SemanticType::Error;
+    }
+
+    // 乘除模：仅标量
+    if (isScalar(l) && isScalar(r)) {
+        return SemanticType::Int;
+    }
+    reportError(expr.line, expr.column, "invalid operands to binary '" + op + "'");
+    return SemanticType::Error;
 }
 
 SemanticType SemanticAnalyzer::checkUnary(const UnaryExpr& expr) {
+    if (expr.op == "&") {
+        return checkAddressOf(expr);
+    }
+    if (expr.op == "*") {
+        return checkDereference(expr);
+    }
+
     SemanticType operand = checkExpr(*expr.operand);
     if (operand == SemanticType::Error) {
         return SemanticType::Error;
     }
-    if (!isScalar(operand)) {
-        reportError(expr.line, expr.column, "invalid operand to unary '" + expr.op + "'");
+    if (expr.op == "!") {
+        // 逻辑非：标量/指针/NULL 均可判真伪，结果 int
+        if (!isConditionType(decayed(operand))) {
+            reportError(expr.line, expr.column, "invalid operand to unary '!'");
+            return SemanticType::Error;
+        }
+        return SemanticType::Int;
+    }
+    // 一元 -：仅标量（char 提升），结果 int；指针取负无意义
+    if (!isScalar(decayed(operand))) {
+        reportError(expr.line, expr.column, "invalid operand to unary '-'");
         return SemanticType::Error;
     }
-    // 一元 - 与 ! 的结果一律是 int（char 操作数先提升为 int）
     return SemanticType::Int;
+}
+
+// &x：操作数必须是左值（x / a[i] / *p），结果为 pointer-to-T
+SemanticType SemanticAnalyzer::checkAddressOf(const UnaryExpr& expr) {
+    const Expr& operand = *expr.operand;
+
+    // 函数名不能取址（无函数指针）
+    if (operand.type == ASTNodeType::IDENTIFIER_EXPR) {
+        const auto& ident = static_cast<const IdentifierExpr&>(operand);
+        const Symbol* symbol = lookupSymbol(ident.name);
+        if (symbol != nullptr && symbol->kind == SymbolKind::Function) {
+            reportError(operand.line,
+                        operand.column,
+                        "cannot take the address of function '" + ident.name + "'");
+            return SemanticType::Error;
+        }
+    }
+
+    SemanticType type = checkExpr(operand);
+    if (type == SemanticType::Error) {
+        return SemanticType::Error;
+    }
+    if (!isLValueExpr(operand)) {
+        reportError(operand.line, operand.column, "cannot take the address of an rvalue");
+        return SemanticType::Error;
+    }
+    if (isArrayType(type)) {
+        reportError(
+          operand.line,
+          operand.column,
+          "cannot take the address of an array (it already decays to a pointer)");
+        return SemanticType::Error;
+    }
+    if (!isScalar(type) && !isPointer(type)) {
+        reportError(operand.line,
+                    operand.column,
+                    "cannot take the address of this expression");
+        return SemanticType::Error;
+    }
+    SemanticType result = pointerTo(type);
+    if (result == SemanticType::Error) {
+        // & 一级指针 → 二级指针，本里程碑不支持
+        reportError(expr.line, expr.column, "multi-level pointers are not supported");
+        return SemanticType::Error;
+    }
+    return result;
+}
+
+// *p：操作数必须是指针，结果为其指向类型；char* 受字节打包限制不可解引用
+SemanticType SemanticAnalyzer::checkDereference(const UnaryExpr& expr) {
+    SemanticType operand = decayed(checkExpr(*expr.operand));
+    if (operand == SemanticType::Error) {
+        return SemanticType::Error;
+    }
+    if (operand == SemanticType::IntPtr) {
+        return SemanticType::Int;
+    }
+    if (operand == SemanticType::CharPtr) {
+        reportError(expr.operand->line,
+                    expr.operand->column,
+                    "cannot dereference 'char*' (string literals are byte-packed; "
+                    "copy into a char array via a host function instead)");
+        return SemanticType::Error;
+    }
+    if (operand == SemanticType::Null) {
+        reportError(expr.operand->line,
+                    expr.operand->column,
+                    "cannot dereference 'NULL'");
+        return SemanticType::Error;
+    }
+    reportError(expr.operand->line,
+                expr.operand->column,
+                "cannot dereference non-pointer type '" + typeName(operand) + "'");
+    return SemanticType::Error;
+}
+
+// a[i] / p[i]：base 为数组（不退化，元素按 4 字节槽存放）或指针；下标必须是标量
+SemanticType SemanticAnalyzer::checkIndex(const IndexExpr& expr) {
+    SemanticType base = checkExpr(*expr.base);
+    SemanticType index = checkExpr(*expr.index);
+
+    if (index != SemanticType::Error && !isScalar(index)) {
+        reportError(expr.index->line,
+                    expr.index->column,
+                    "array subscript is not an integer");
+    }
+
+    if (base == SemanticType::Error) {
+        return SemanticType::Error;
+    }
+    switch (base) {
+    case SemanticType::IntPtr:
+    case SemanticType::IntArray:
+        return SemanticType::Int;
+    case SemanticType::CharArray:
+        return SemanticType::Char;
+    case SemanticType::CharPtr:
+        reportError(expr.base->line,
+                    expr.base->column,
+                    "cannot index through 'char*' (string literals are byte-packed; "
+                    "copy into a char array via a host function instead)");
+        return SemanticType::Error;
+    default:
+        reportError(expr.base->line,
+                    expr.base->column,
+                    "subscripted value is not an array or pointer");
+        return SemanticType::Error;
+    }
 }
 
 SemanticType SemanticAnalyzer::checkCall(const CallExpr& expr) {
@@ -513,11 +789,11 @@ SemanticType SemanticAnalyzer::checkCall(const CallExpr& expr) {
 }
 
 void SemanticAnalyzer::checkCondition(const Expr& expr) {
-    SemanticType type = checkExpr(expr);
+    SemanticType type = decayed(checkExpr(expr));
     if (type == SemanticType::Void) {
         reportError(expr.line, expr.column, "void value used as condition");
     }
-    // Error：子表达式已报错，静默；Int/Char：非零为真，均可
+    // Error：子表达式已报错，静默；标量/指针/NULL：非零为真，均可
 }
 
 void SemanticAnalyzer::checkConversion(
@@ -526,18 +802,48 @@ void SemanticAnalyzer::checkConversion(
         return; // 前序错误已报告，抑制级联
     }
     if (from == to) {
-        return; // int→int、char→char
+        if (isArrayType(from)) {
+            // 数组整体拷贝不支持（PRD R1.2）：初始化/赋值/传参中数组只能退化
+            reportError(line,
+                        column,
+                        "cannot copy array of type '" + typeName(from) + "' in "
+                          + context);
+        }
+        return; // int→int、char→char、同型指针
     }
     if (from == SemanticType::Char && to == SemanticType::Int) {
         return; // 提升：char 在需要 int 的场合无损加宽
+    }
+    if (from == SemanticType::IntArray && to == SemanticType::IntPtr) {
+        return; // 数组退化：int[] → int*（传参/赋值/返回）
+    }
+    if (from == SemanticType::CharArray && to == SemanticType::CharPtr) {
+        return; // 数组退化：char[] → char*
+    }
+    if (from == SemanticType::Null && isPointer(to)) {
+        return; // NULL 可赋给任意指针类型
     }
     if (from == SemanticType::Void) {
         reportError(line, column, "void value used in " + context);
         return;
     }
-    // 剩余唯一路径：int → char。这是窄化转换，当前语言没有显式转换语法，
-    // 为避免静默截断一律拒绝。
-    reportError(line, column, "cannot implicitly convert int to char in " + context);
+    if (from == SemanticType::Int && to == SemanticType::Char) {
+        // 窄化转换：当前语言没有显式转换语法，为避免静默截断一律拒绝
+        reportError(line, column, "cannot implicitly convert int to char in " + context);
+        return;
+    }
+    if (isPointer(from) && isPointer(to)) {
+        reportError(line,
+                    column,
+                    "incompatible pointer types ('" + typeName(from) + "' to '"
+                      + typeName(to) + "') in " + context);
+        return;
+    }
+    // 其余一律拒绝：指针与标量互转、数组与标量、NULL 与标量等
+    reportError(line,
+                column,
+                "cannot convert '" + typeName(from) + "' to '" + typeName(to) + "' in "
+                  + context);
 }
 
 // ---- return 覆盖检查 ----
@@ -597,10 +903,143 @@ std::string SemanticAnalyzer::typeName(SemanticType type) {
         return "void";
     case SemanticType::Error:
         return "<error>";
+    case SemanticType::IntPtr:
+        return "int*";
+    case SemanticType::CharPtr:
+        return "char*";
+    case SemanticType::IntArray:
+        return "int[]";
+    case SemanticType::CharArray:
+        return "char[]";
+    case SemanticType::Null:
+        return "NULL";
     }
     return "<error>";
 }
 
 bool SemanticAnalyzer::isScalar(SemanticType type) {
     return type == SemanticType::Int || type == SemanticType::Char;
+}
+
+// ---- 类型工具（PRD R1.2） ----
+
+SemanticType SemanticAnalyzer::pointerTo(SemanticType t) {
+    switch (t) {
+    case SemanticType::Int:
+        return SemanticType::IntPtr;
+    case SemanticType::Char:
+        return SemanticType::CharPtr;
+    default:
+        return SemanticType::Error; // void*/多级指针不可构造
+    }
+}
+
+SemanticType SemanticAnalyzer::arrayOf(SemanticType t) {
+    switch (t) {
+    case SemanticType::Int:
+        return SemanticType::IntArray;
+    case SemanticType::Char:
+        return SemanticType::CharArray;
+    default:
+        return SemanticType::Error;
+    }
+}
+
+SemanticType SemanticAnalyzer::decayed(SemanticType t) {
+    switch (t) {
+    case SemanticType::IntArray:
+        return SemanticType::IntPtr;
+    case SemanticType::CharArray:
+        return SemanticType::CharPtr;
+    default:
+        return t;
+    }
+}
+
+bool SemanticAnalyzer::isPointer(SemanticType type) {
+    return type == SemanticType::IntPtr || type == SemanticType::CharPtr;
+}
+
+bool SemanticAnalyzer::isArrayType(SemanticType type) {
+    return type == SemanticType::IntArray || type == SemanticType::CharArray;
+}
+
+bool SemanticAnalyzer::isLValueExpr(const Expr& expr) {
+    switch (expr.type) {
+    case ASTNodeType::IDENTIFIER_EXPR:
+    case ASTNodeType::INDEX_EXPR:
+        return true;
+    case ASTNodeType::UNARY_EXPR:
+        return static_cast<const UnaryExpr&>(expr).op == "*";
+    default:
+        return false;
+    }
+}
+
+// 由声明的类型要素计算语义类型；不合法组合（多级指针/多维数组/指针数组/
+// 越界长度/void* /void[]）按 report 决定是否报错，返回 Error 毒类型
+SemanticType SemanticAnalyzer::declaredType(const std::string& baseName,
+                                            int pointerDepth,
+                                            bool isArray,
+                                            int arraySize,
+                                            int arrayDims,
+                                            int line,
+                                            int column,
+                                            bool report) {
+    const std::string stars(static_cast<size_t>(pointerDepth), '*');
+    const std::string typeText = baseName + stars;
+
+    SemanticType base = typeFromName(baseName);
+    if (base == SemanticType::Error) {
+        if (report) {
+            reportError(line, column, "unknown type '" + baseName + "'");
+        }
+        return SemanticType::Error;
+    }
+    if (pointerDepth > 1) {
+        if (report) {
+            reportError(line,
+                        column,
+                        "multi-level pointers are not supported ('" + typeText + "')");
+        }
+        return SemanticType::Error;
+    }
+    if (isArray) {
+        if (pointerDepth > 0) {
+            if (report) {
+                reportError(line,
+                            column,
+                            "arrays of pointers are not supported ('" + typeText
+                              + "[...]')");
+            }
+            return SemanticType::Error;
+        }
+        if (arrayDims > 1) {
+            if (report) {
+                reportError(line, column, "multidimensional arrays are not supported");
+            }
+            return SemanticType::Error;
+        }
+        if (arraySize <= 0) {
+            if (report) {
+                reportError(line, column, "array size must be positive");
+            }
+            return SemanticType::Error;
+        }
+        if (base == SemanticType::Void) {
+            if (report) {
+                reportError(line, column, "cannot declare array of 'void'");
+            }
+            return SemanticType::Error;
+        }
+        return arrayOf(base);
+    }
+    if (pointerDepth == 1) {
+        SemanticType result = pointerTo(base);
+        if (result == SemanticType::Error && report) {
+            reportError(line, column, "'" + typeText + "' is not supported");
+        }
+        return result;
+    }
+    return base;
 }

@@ -2,6 +2,36 @@
 #include <algorithm>
 #include <stdexcept>
 
+namespace {
+
+    // 规范类型名：int/char + 指针星号 + 数组方括号（供 exprType 与符号表使用）
+    std::string canonicalType(const std::string& base, int pointerDepth, bool isArray) {
+        if (isArray) {
+            return base + "[]";
+        }
+        if (pointerDepth >= 1) {
+            return base + "*";
+        }
+        return base;
+    }
+
+    bool isPointerTypeName(const std::string& t) { return t == "int*" || t == "char*"; }
+
+    bool isArrayTypeName(const std::string& t) { return t == "int[]" || t == "char[]"; }
+
+    // 数组名在值上下文退化为指针
+    std::string decayedTypeName(const std::string& t) {
+        if (t == "int[]") {
+            return "int*";
+        }
+        if (t == "char[]") {
+            return "char*";
+        }
+        return t;
+    }
+
+} // namespace
+
 CodeGenerator::CodeGenerator() { m_sink = &m_code; }
 
 std::string CodeGenerator::generate(Program& program) {
@@ -16,6 +46,8 @@ std::string CodeGenerator::generate(Program& program) {
     m_registeredGlobals.clear();
     m_externs.clear();
     m_externSet.clear();
+    m_stringLiterals.clear();
+    m_functionReturns.clear();
     m_breakLabels.clear();
     m_continueLabels.clear();
     m_nextSlot = 0;
@@ -61,15 +93,18 @@ void CodeGenerator::registerGlobal(VarDeclaration& node) {
         return; // 同一声明只登记一次
     }
     if (m_globalSymbols.find(node.name) == m_globalSymbols.end()) {
-        m_globalOrder.push_back(".g_" + node.name);
+        m_globalOrder.push_back(node.name);
     }
     Symbol symbol;
     symbol.kind = SymKind::Global;
     symbol.label = ".g_" + node.name;
-    symbol.type = node.type;
+    symbol.type = canonicalType(node.type, node.pointerDepth, node.isArray);
+    symbol.isArray = node.isArray;
+    symbol.arraySize = node.arraySize;
     m_globalSymbols[node.name] = symbol;
 
-    if (node.initializer) {
+    // 数组整体初始化被语义拒绝；此处防御式跳过
+    if (node.initializer && !node.isArray) {
         GlobalInit init;
         init.label = symbol.label;
         init.expr = node.initializer.get();
@@ -257,8 +292,10 @@ int CodeGenerator::countLocalSlots(Stmt* stmt) const {
         }
         return count;
     }
-    case ASTNodeType::VAR_DECLARATION: // 语句上下文的声明节点（StmtVarDeclaration）
-        return 1;
+    case ASTNodeType::VAR_DECLARATION: { // 语句上下文的声明节点（StmtVarDeclaration）
+        auto& varDecl = static_cast<StmtVarDeclaration&>(*stmt);
+        return varDecl.isArray ? std::max(varDecl.arraySize, 1) : 1;
+    }
     case ASTNodeType::IF_STMT: {
         auto& ifStmt = static_cast<IfStmt&>(*stmt);
         return countLocalSlots(ifStmt.thenBranch.get())
@@ -281,6 +318,8 @@ void CodeGenerator::visit(Program& node) {
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
             auto& func = static_cast<FuncDeclaration&>(*decl);
             m_functions.insert(func.name);
+            m_functionReturns[func.name] =
+              canonicalType(func.returnType, func.returnPointerDepth, false);
         } else if (decl->type == ASTNodeType::VAR_DECLARATION) {
             registerGlobal(static_cast<VarDeclaration&>(*decl));
         }
@@ -310,14 +349,24 @@ void CodeGenerator::visit(Program& node) {
         emit("    ret");
     }
 
-    // 数据段：全局变量标号地址 = codeSize + 段内偏移（nas 统一编址回填）
-    if (!m_globalOrder.empty()) {
+    // 数据段：全局变量/字符串字面量标号地址 = codeSize + 段内偏移（nas 统一编址回填）
+    if (!m_globalOrder.empty() || !m_stringLiterals.empty()) {
         m_sink = &m_data;
         emit("");
         emit("; Data segment");
-        for (const auto& label : m_globalOrder) {
-            emitLabel(label);
-            emit("    dd 0");
+        // 全局变量：标量 1 个字；数组按元素数排布（每元素 1 字）
+        for (const auto& name : m_globalOrder) {
+            const Symbol& symbol = m_globalSymbols.at(name);
+            emitLabel(symbol.label);
+            const int words = symbol.isArray ? std::max(symbol.arraySize, 1) : 1;
+            for (int i = 0; i < words; ++i) {
+                emit("    dd 0");
+            }
+        }
+        // 字符串字面量：按字节打包 + 显式 NUL 终止（宿主 strlen 等按字节读）
+        for (const auto& entry : m_stringLiterals) {
+            emitLabel(entry.second);
+            emit("    db \"" + entry.first + "\", 0");
         }
         m_sink = &m_code;
     }
@@ -344,14 +393,19 @@ void CodeGenerator::visit(FuncDeclaration& node) {
         Symbol symbol;
         symbol.kind = SymKind::Local;
         symbol.slot = i + 1;
-        symbol.type = node.parameters[i]->type;
+        // 形参不能是数组（解析器拒绝）；指针形参按值传递地址
+        symbol.type = canonicalType(node.parameters[i]->type,
+                                    node.parameters[i]->pointerDepth,
+                                    false);
         m_localSymbols[node.parameters[i]->name] = symbol;
     }
     for (size_t i = 4; i < node.parameters.size(); ++i) {
         Symbol symbol;
         symbol.kind = SymKind::StackArg;
         symbol.argIndex = static_cast<int>(i) + 1;
-        symbol.type = node.parameters[i]->type;
+        symbol.type = canonicalType(node.parameters[i]->type,
+                                    node.parameters[i]->pointerDepth,
+                                    false);
         m_localSymbols[node.parameters[i]->name] = symbol;
     }
     m_nextSlot = regParams;
@@ -528,8 +582,26 @@ void CodeGenerator::visit(BinaryExpr& node) {
     emit("    pop R0"); // 左操作数
 
     if (node.op == "+") {
-        emit("    add R0, R1");
+        // 指针 ± 整数按指向类型大小缩放（当前全部标量 4 字节）
+        const std::string lt = decayedTypeName(exprType(*node.left));
+        const std::string rt = decayedTypeName(exprType(*node.right));
+        if (isPointerTypeName(lt)) {
+            emit("    lmm R2, 4");
+            emit("    mul R1, R2");
+            emit("    add R0, R1");
+        } else if (isPointerTypeName(rt)) {
+            emit("    lmm R2, 4");
+            emit("    mul R0, R2");
+            emit("    add R0, R1");
+        } else {
+            emit("    add R0, R1");
+        }
     } else if (node.op == "-") {
+        const std::string lt = decayedTypeName(exprType(*node.left));
+        if (isPointerTypeName(lt)) {
+            emit("    lmm R2, 4");
+            emit("    mul R1, R2");
+        }
         emit("    sub R0, R1");
     } else if (node.op == "*") {
         emit("    mul R0, R1");
@@ -544,6 +616,21 @@ void CodeGenerator::visit(BinaryExpr& node) {
 }
 
 void CodeGenerator::visit(UnaryExpr& node) {
+    if (node.op == "&") {
+        // 取址：目标地址 → R0（仅左值，语义已校验）
+        emitAddressOf(*node.operand);
+        emit("    push R0");
+        return;
+    }
+    if (node.op == "*") {
+        // 解引用：操作数求值得地址（数组名退化为首元素地址），LOAD 取内容
+        node.operand->accept(*this);
+        emit("    pop R0");
+        emit("    load R0, [R0]");
+        emit("    push R0");
+        return;
+    }
+
     node.operand->accept(*this);
     emit("    pop R0");
 
@@ -568,14 +655,35 @@ void CodeGenerator::visit(UnaryExpr& node) {
 }
 
 void CodeGenerator::visit(AssignExpr& node) {
-    node.value->accept(*this);
-    emit("    pop R0");
+    node.value->accept(*this); // 值求值后压栈
 
-    const Symbol* symbol = findSymbol(node.name);
-    if (!symbol) {
-        throw std::runtime_error("Undefined variable: " + node.name);
+    switch (node.target->type) {
+    case ASTNodeType::IDENTIFIER_EXPR: {
+        const auto& ident = static_cast<IdentifierExpr&>(*node.target);
+        const Symbol* symbol = findSymbol(ident.name);
+        if (!symbol) {
+            throw std::runtime_error("Undefined variable: " + ident.name);
+        }
+        if (isArrayTypeName(symbol->type)) {
+            // 数组整体赋值已被语义拒绝；防御式报错
+            throw std::runtime_error("Cannot assign to array: " + ident.name);
+        }
+        emit("    pop R0");
+        emitStoreVar(*symbol);
+        break;
     }
-    emitStoreVar(*symbol);
+    case ASTNodeType::INDEX_EXPR:
+    case ASTNodeType::UNARY_EXPR: {
+        // a[i] = v / *p = v：目标地址 → R0 → R6，弹出值存入
+        emitAddressOf(*node.target);
+        emit("    mov R6, R0");
+        emit("    pop R0");
+        emit("    store [R6], R0");
+        break;
+    }
+    default:
+        throw std::runtime_error("Invalid assignment target");
+    }
 
     // 赋值表达式的值
     emit("    push R0");
@@ -624,7 +732,12 @@ void CodeGenerator::visit(IdentifierExpr& node) {
     if (!symbol) {
         throw std::runtime_error("Undefined variable: " + node.name);
     }
-    emitLoadVar(*symbol);
+    if (isArrayTypeName(symbol->type)) {
+        // 数组名退化为首元素地址（传参/赋给指针/比较/条件）
+        emitAddressOfSymbol(*symbol);
+    } else {
+        emitLoadVar(*symbol);
+    }
     emit("    push R0");
 }
 
@@ -638,16 +751,211 @@ void CodeGenerator::visit(CharLiteral& node) {
     emit("    push R0");
 }
 
+void CodeGenerator::visit(StringLiteral& node) {
+    // 字符串字面量：数据段标号地址即 char* 值
+    const std::string label = internString(node.value);
+    emit("    lea R0, " + label);
+    emit("    push R0");
+}
+
+void CodeGenerator::visit(NullLiteral& node) {
+    (void)node;
+    emit("    lmm R0, 0");
+    emit("    push R0");
+}
+
+void CodeGenerator::visit(IndexExpr& node) {
+    // a[i] / p[i]：元素地址 → LOAD
+    emitElementAddress(node);
+    emit("    load R0, [R0]");
+    emit("    push R0");
+}
+
 void CodeGenerator::visit(StmtVarDeclaration& node) {
     Symbol symbol;
     symbol.kind = SymKind::Local;
     symbol.slot = ++m_nextSlot;
-    symbol.type = node.type;
+    symbol.type = canonicalType(node.type, node.pointerDepth, node.isArray);
+    symbol.isArray = node.isArray;
+    symbol.arraySize = node.arraySize;
     m_localSymbols[node.name] = symbol;
+
+    if (node.isArray) {
+        // 数组占 arraySize 个连续槽位（首元素在最低地址槽，向高地址延伸）
+        m_nextSlot += std::max(node.arraySize, 1) - 1;
+    }
 
     if (node.initializer) {
         node.initializer->accept(*this);
         emit("    pop R0");
         emitStoreVar(symbol);
+    }
+}
+
+// ---- 地址计算 ----
+
+// 变量地址 → R0（数组名即首元素地址）
+// 栈数组占据 slot..slot+size-1 号槽（地址 BP-4·slot 为块内最高地址），
+// 首元素固定放在最低地址槽：base = BP - 4*(slot+size-1)，元素向高地址延伸，
+// 与指针运算 a[k] == *(a+k) 的语义保持一致
+void CodeGenerator::emitAddressOfSymbol(const Symbol& sym) {
+    switch (sym.kind) {
+    case SymKind::Local: {
+        const int slotOffset =
+          sym.slot + (sym.isArray ? std::max(sym.arraySize, 1) - 1 : 0);
+        emit("    mov R0, R5");
+        emit("    subi R0, " + std::to_string(4 * slotOffset));
+        break;
+    }
+    case SymKind::StackArg:
+        emit("    mov R0, R5");
+        emit("    addi R0, " + std::to_string(4 * (sym.argIndex - 3)));
+        break;
+    case SymKind::Global:
+        emit("    lea R0, " + sym.label);
+        break;
+    }
+}
+
+// 左值表达式地址 → R0：x / a[i] / *p
+void CodeGenerator::emitAddressOf(Expr& expr) {
+    switch (expr.type) {
+    case ASTNodeType::IDENTIFIER_EXPR: {
+        auto& ident = static_cast<IdentifierExpr&>(expr);
+        const Symbol* symbol = findSymbol(ident.name);
+        if (!symbol) {
+            throw std::runtime_error("Undefined variable: " + ident.name);
+        }
+        emitAddressOfSymbol(*symbol);
+        break;
+    }
+    case ASTNodeType::INDEX_EXPR:
+        emitElementAddress(static_cast<IndexExpr&>(expr));
+        break;
+    case ASTNodeType::UNARY_EXPR:
+        if (static_cast<UnaryExpr&>(expr).op == "*") {
+            // *p：操作数求值即地址（数组名退化同样成立，*a == a[0]）
+            static_cast<UnaryExpr&>(expr).operand->accept(*this);
+            emit("    pop R0");
+            break;
+        }
+        throw std::runtime_error("cannot take address of this expression");
+    default:
+        throw std::runtime_error("cannot take address of this expression");
+    }
+}
+
+// a[i] / p[i] 元素地址 → R0
+// 先求下标压栈暂存，再取基址（下标求值会使用 R0 作暂存，不能先算基址）；
+// 元素地址 = 基址 + 4*i（数组首元素与指针运算同一语义：a[k] == *(a+k)）
+void CodeGenerator::emitElementAddress(IndexExpr& node) {
+    // 下标 → 栈
+    node.index->accept(*this);
+
+    // 基址 → R0：数组名取首元素地址；其余表达式求值得指针
+    if (node.base->type == ASTNodeType::IDENTIFIER_EXPR) {
+        auto& ident = static_cast<IdentifierExpr&>(*node.base);
+        const Symbol* symbol = findSymbol(ident.name);
+        if (symbol && isArrayTypeName(symbol->type)) {
+            emitAddressOfSymbol(*symbol);
+        } else {
+            node.base->accept(*this);
+            emit("    pop R0");
+        }
+    } else {
+        node.base->accept(*this);
+        emit("    pop R0");
+    }
+
+    // 变址：R1 = index * 4（当前全部元素 4 字节），正向偏移
+    emit("    pop R1");
+    emit("    lmm R2, 4");
+    emit("    mul R1, R2");
+    emit("    add R0, R1");
+}
+
+// 字符串字面量去重入数据段
+std::string CodeGenerator::internString(const std::string& content) {
+    auto it = m_stringLiterals.find(content);
+    if (it != m_stringLiterals.end()) {
+        return it->second;
+    }
+    const std::string label = ".str" + std::to_string(m_stringLiterals.size());
+    m_stringLiterals[content] = label;
+    return label;
+}
+
+// ---- 表达式静态类型推断 ----
+
+std::string CodeGenerator::exprType(const Expr& expr) const {
+    switch (expr.type) {
+    case ASTNodeType::INTEGER_LITERAL:
+    case ASTNodeType::CHAR_LITERAL:
+        return "int";
+    case ASTNodeType::STRING_LITERAL:
+        return "char*";
+    case ASTNodeType::NULL_LITERAL:
+        return "null";
+    case ASTNodeType::IDENTIFIER_EXPR: {
+        const Symbol* symbol = findSymbol(static_cast<const IdentifierExpr&>(expr).name);
+        return symbol ? symbol->type : "<error>";
+    }
+    case ASTNodeType::UNARY_EXPR: {
+        const auto& unary = static_cast<const UnaryExpr&>(expr);
+        if (unary.op == "&") {
+            const std::string t = exprType(*unary.operand);
+            if (t == "int") {
+                return "int*";
+            }
+            if (t == "char") {
+                return "char*";
+            }
+            return "<error>";
+        }
+        if (unary.op == "*") {
+            const std::string t = decayedTypeName(exprType(*unary.operand));
+            if (t == "int*") {
+                return "int";
+            }
+            if (t == "char*") {
+                return "char";
+            }
+            return "<error>";
+        }
+        return "int"; // - !
+    }
+    case ASTNodeType::INDEX_EXPR: {
+        const std::string t = exprType(*static_cast<const IndexExpr&>(expr).base);
+        if (t == "int[]" || t == "int*") {
+            return "int";
+        }
+        if (t == "char[]") {
+            return "char";
+        }
+        return "<error>";
+    }
+    case ASTNodeType::BINARY_EXPR: {
+        const auto& binary = static_cast<const BinaryExpr&>(expr);
+        if (binary.op != "+" && binary.op != "-") {
+            return "int"; // 比较/逻辑/乘除模结果均为 int
+        }
+        const std::string lt = decayedTypeName(exprType(*binary.left));
+        const std::string rt = decayedTypeName(exprType(*binary.right));
+        if (isPointerTypeName(lt)) {
+            return lt; // ptr ± int
+        }
+        if (isPointerTypeName(rt) && binary.op == "+") {
+            return rt; // int + ptr
+        }
+        return "int";
+    }
+    case ASTNodeType::ASSIGN_EXPR:
+        return exprType(*static_cast<const AssignExpr&>(expr).target);
+    case ASTNodeType::CALL_EXPR: {
+        auto it = m_functionReturns.find(static_cast<const CallExpr&>(expr).callee);
+        return it != m_functionReturns.end() ? it->second : "int";
+    }
+    default:
+        return "<error>";
     }
 }

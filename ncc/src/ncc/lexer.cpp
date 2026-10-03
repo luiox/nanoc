@@ -2,8 +2,8 @@
 #include <cctype>
 #include <stdexcept>
 
-Lexer::Lexer(const std::string& source) 
-    : m_source(source), m_pos(0), m_line(1), m_column(1) {
+Lexer::Lexer(const std::string& source)
+  : m_source(source), m_pos(0), m_line(1), m_column(1) {
     initKeywords();
 }
 
@@ -18,6 +18,7 @@ void Lexer::initKeywords() {
     m_keywords["return"] = NTokenKind::KEYWORD_RETURN;
     m_keywords["break"] = NTokenKind::KEYWORD_BREAK;
     m_keywords["continue"] = NTokenKind::KEYWORD_CONTINUE;
+    m_keywords["NULL"] = NTokenKind::KEYWORD_NULL;
 }
 
 char Lexer::currentChar() const {
@@ -78,18 +79,19 @@ Token Lexer::readIdentifier() {
     int startLine = m_line;
     int startColumn = m_column;
     std::string value;
-    
-    while (m_pos < m_source.length() && (std::isalnum(currentChar()) || currentChar() == '_')) {
+
+    while (m_pos < m_source.length()
+           && (std::isalnum(currentChar()) || currentChar() == '_')) {
         value += currentChar();
         advance();
     }
-    
+
     // 检查是否是关键字
     auto it = m_keywords.find(value);
     if (it != m_keywords.end()) {
         return Token(it->second, value, startLine, startColumn);
     }
-    
+
     return Token(NTokenKind::IDENTIFIER, value, startLine, startColumn);
 }
 
@@ -97,31 +99,62 @@ Token Lexer::readNumber() {
     int startLine = m_line;
     int startColumn = m_column;
     std::string value;
-    
+
     while (m_pos < m_source.length() && std::isdigit(currentChar())) {
         value += currentChar();
         advance();
     }
-    
+
     return Token(NTokenKind::INTEGER_CONSTANT, value, startLine, startColumn);
 }
 
 Token Lexer::readChar() {
     int startLine = m_line;
     int startColumn = m_column;
-    
+
     advance(); // 跳过开头的单引号
-    
+
     char c = currentChar();
     advance(); // 跳过字符
-    
+
     if (currentChar() != '\'') {
-        throw std::runtime_error("Expected closing single quote at line " + std::to_string(m_line));
+        throw std::runtime_error("Expected closing single quote at line "
+                                 + std::to_string(m_line));
     }
     advance(); // 跳过结尾的单引号
-    
+
     std::string value(1, c);
     return Token(NTokenKind::CHAR_CONSTANT, value, startLine, startColumn);
+}
+
+// 字符串字面量：value 保留引号内的原文（转义序列原样保留），由数据段发射方
+// 原样交给汇编器解码（nas 支持 \n \t \r \0 \\ \"）
+Token Lexer::readString() {
+    int startLine = m_line;
+    int startColumn = m_column;
+
+    advance(); // 跳过开头的双引号
+
+    std::string value;
+    while (m_pos < m_source.length()) {
+        char c = currentChar();
+        if (c == '"') {
+            advance(); // 跳过结尾的双引号
+            return Token(NTokenKind::STRING_CONSTANT, value, startLine, startColumn);
+        }
+        if (c == '\n') {
+            throw std::runtime_error("Unterminated string literal at line "
+                                     + std::to_string(startLine));
+        }
+        if (c == '\\' && m_pos + 1 < m_source.length()) {
+            value += c;
+            advance();
+        }
+        value += c;
+        advance();
+    }
+    throw std::runtime_error("Unterminated string literal at line "
+                             + std::to_string(startLine));
 }
 
 Token Lexer::readOperator() {
@@ -129,56 +162,59 @@ Token Lexer::readOperator() {
     int startColumn = m_column;
     char c = currentChar();
     advance();
-    
+
     switch (c) {
-        case '+':
-            return Token(NTokenKind::OPERATOR_PLUS, "+", startLine, startColumn);
-        case '-':
-            return Token(NTokenKind::OPERATOR_MINUS, "-", startLine, startColumn);
-        case '*':
-            return Token(NTokenKind::OPERATOR_MULTIPLY, "*", startLine, startColumn);
-        case '/':
-            return Token(NTokenKind::OPERATOR_DIVIDE, "/", startLine, startColumn);
-        case '%':
-            return Token(NTokenKind::OPERATOR_MODULO, "%", startLine, startColumn);
-        case '=':
-            if (currentChar() == '=') {
-                advance();
-                return Token(NTokenKind::OPERATOR_EQUAL, "==", startLine, startColumn);
-            }
-            return Token(NTokenKind::OPERATOR_ASSIGN, "=", startLine, startColumn);
-        case '!':
-            if (currentChar() == '=') {
-                advance();
-                return Token(NTokenKind::OPERATOR_NOT_EQUAL, "!=", startLine, startColumn);
-            }
-            return Token(NTokenKind::OPERATOR_LOGICAL_NOT, "!", startLine, startColumn);
-        case '<':
-            if (currentChar() == '=') {
-                advance();
-                return Token(NTokenKind::OPERATOR_LESS_EQUAL, "<=", startLine, startColumn);
-            }
-            return Token(NTokenKind::OPERATOR_LESS, "<", startLine, startColumn);
-        case '>':
-            if (currentChar() == '=') {
-                advance();
-                return Token(NTokenKind::OPERATOR_GREATER_EQUAL, ">=", startLine, startColumn);
-            }
-            return Token(NTokenKind::OPERATOR_GREATER, ">", startLine, startColumn);
-        case '&':
-            if (currentChar() == '&') {
-                advance();
-                return Token(NTokenKind::OPERATOR_LOGICAL_AND, "&&", startLine, startColumn);
-            }
-            throw std::runtime_error("Expected '&' at line " + std::to_string(m_line));
-        case '|':
-            if (currentChar() == '|') {
-                advance();
-                return Token(NTokenKind::OPERATOR_LOGICAL_OR, "||", startLine, startColumn);
-            }
-            throw std::runtime_error("Expected '|' at line " + std::to_string(m_line));
-        default:
-            throw std::runtime_error("Unknown operator at line " + std::to_string(m_line));
+    case '+':
+        return Token(NTokenKind::OPERATOR_PLUS, "+", startLine, startColumn);
+    case '-':
+        return Token(NTokenKind::OPERATOR_MINUS, "-", startLine, startColumn);
+    case '*':
+        return Token(NTokenKind::OPERATOR_MULTIPLY, "*", startLine, startColumn);
+    case '/':
+        return Token(NTokenKind::OPERATOR_DIVIDE, "/", startLine, startColumn);
+    case '%':
+        return Token(NTokenKind::OPERATOR_MODULO, "%", startLine, startColumn);
+    case '=':
+        if (currentChar() == '=') {
+            advance();
+            return Token(NTokenKind::OPERATOR_EQUAL, "==", startLine, startColumn);
+        }
+        return Token(NTokenKind::OPERATOR_ASSIGN, "=", startLine, startColumn);
+    case '!':
+        if (currentChar() == '=') {
+            advance();
+            return Token(NTokenKind::OPERATOR_NOT_EQUAL, "!=", startLine, startColumn);
+        }
+        return Token(NTokenKind::OPERATOR_LOGICAL_NOT, "!", startLine, startColumn);
+    case '<':
+        if (currentChar() == '=') {
+            advance();
+            return Token(NTokenKind::OPERATOR_LESS_EQUAL, "<=", startLine, startColumn);
+        }
+        return Token(NTokenKind::OPERATOR_LESS, "<", startLine, startColumn);
+    case '>':
+        if (currentChar() == '=') {
+            advance();
+            return Token(NTokenKind::OPERATOR_GREATER_EQUAL,
+                         ">=",
+                         startLine,
+                         startColumn);
+        }
+        return Token(NTokenKind::OPERATOR_GREATER, ">", startLine, startColumn);
+    case '&':
+        if (currentChar() == '&') {
+            advance();
+            return Token(NTokenKind::OPERATOR_LOGICAL_AND, "&&", startLine, startColumn);
+        }
+        return Token(NTokenKind::OPERATOR_AMPERSAND, "&", startLine, startColumn);
+    case '|':
+        if (currentChar() == '|') {
+            advance();
+            return Token(NTokenKind::OPERATOR_LOGICAL_OR, "||", startLine, startColumn);
+        }
+        throw std::runtime_error("Expected '|' at line " + std::to_string(m_line));
+    default:
+        throw std::runtime_error("Unknown operator at line " + std::to_string(m_line));
     }
 }
 
@@ -187,72 +223,77 @@ Token Lexer::readDelimiter() {
     int startColumn = m_column;
     char c = currentChar();
     advance();
-    
+
     switch (c) {
-        case ';':
-            return Token(NTokenKind::DELIMITER_SEMICOLON, ";", startLine, startColumn);
-        case ',':
-            return Token(NTokenKind::DELIMITER_COMMA, ",", startLine, startColumn);
-        case '(':
-            return Token(NTokenKind::DELIMITER_LPAREN, "(", startLine, startColumn);
-        case ')':
-            return Token(NTokenKind::DELIMITER_RPAREN, ")", startLine, startColumn);
-        case '{':
-            return Token(NTokenKind::DELIMITER_LBRACE, "{", startLine, startColumn);
-        case '}':
-            return Token(NTokenKind::DELIMITER_RBRACE, "}", startLine, startColumn);
-        case '[':
-            return Token(NTokenKind::DELIMITER_LBRACKET, "[", startLine, startColumn);
-        case ']':
-            return Token(NTokenKind::DELIMITER_RBRACKET, "]", startLine, startColumn);
-        default:
-            throw std::runtime_error("Unknown delimiter at line " + std::to_string(m_line));
+    case ';':
+        return Token(NTokenKind::DELIMITER_SEMICOLON, ";", startLine, startColumn);
+    case ',':
+        return Token(NTokenKind::DELIMITER_COMMA, ",", startLine, startColumn);
+    case '(':
+        return Token(NTokenKind::DELIMITER_LPAREN, "(", startLine, startColumn);
+    case ')':
+        return Token(NTokenKind::DELIMITER_RPAREN, ")", startLine, startColumn);
+    case '{':
+        return Token(NTokenKind::DELIMITER_LBRACE, "{", startLine, startColumn);
+    case '}':
+        return Token(NTokenKind::DELIMITER_RBRACE, "}", startLine, startColumn);
+    case '[':
+        return Token(NTokenKind::DELIMITER_LBRACKET, "[", startLine, startColumn);
+    case ']':
+        return Token(NTokenKind::DELIMITER_RBRACKET, "]", startLine, startColumn);
+    default:
+        throw std::runtime_error("Unknown delimiter at line " + std::to_string(m_line));
     }
 }
 
 Token Lexer::nextToken() {
     skipWhitespace();
-    
+
     // 跳过注释
-    while (m_pos < m_source.length() && currentChar() == '/' && 
-           (peekChar() == '/' || peekChar() == '*')) {
+    while (m_pos < m_source.length() && currentChar() == '/'
+           && (peekChar() == '/' || peekChar() == '*')) {
         skipComment();
         skipWhitespace();
     }
-    
+
     if (m_pos >= m_source.length()) {
         return Token(NTokenKind::TOKEN_EOF, "", m_line, m_column);
     }
-    
+
     char c = currentChar();
-    
+
     // 标识符或关键字
     if (std::isalpha(c) || c == '_') {
         return readIdentifier();
     }
-    
+
     // 数字
     if (std::isdigit(c)) {
         return readNumber();
     }
-    
+
     // 字符常量
     if (c == '\'') {
         return readChar();
     }
-    
+
+    // 字符串字面量
+    if (c == '"') {
+        return readString();
+    }
+
     // 运算符
-    if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || 
-        c == '=' || c == '!' || c == '<' || c == '>' || c == '&' || c == '|') {
+    if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=' || c == '!'
+        || c == '<' || c == '>' || c == '&' || c == '|') {
         return readOperator();
     }
-    
+
     // 分隔符
-    if (c == ';' || c == ',' || c == '(' || c == ')' || 
-        c == '{' || c == '}' || c == '[' || c == ']') {
+    if (c == ';' || c == ',' || c == '(' || c == ')' || c == '{' || c == '}' || c == '['
+        || c == ']') {
         return readDelimiter();
     }
-    
+
     // 未知字符
     advance();
     return Token(NTokenKind::TOKEN_UNKNOWN, std::string(1, c), m_line, m_column - 1);
@@ -260,15 +301,15 @@ Token Lexer::nextToken() {
 
 std::vector<Token> Lexer::tokenize() {
     std::vector<Token> tokens;
-    
+
     while (true) {
         Token token = nextToken();
         tokens.push_back(token);
-        
+
         if (token.kind == NTokenKind::TOKEN_EOF) {
             break;
         }
     }
-    
+
     return tokens;
 }

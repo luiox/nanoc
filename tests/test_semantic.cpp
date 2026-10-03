@@ -653,3 +653,415 @@ TEST(SemanticTest, DiagnosticStructureAndFilePrefix) {
     EXPECT_EQ(result.diagnostics[0].column, 12);
     EXPECT_EQ(result.diagnostics[0].message, "use of undeclared identifier 'x'");
 }
+
+// ---------------------------------------------------------------------------
+// R1.2 类型系统扩展（第一批）：字符串字面量 / 指针 / 一维数组
+// ---------------------------------------------------------------------------
+
+// 正例：指针声明/取址/解引用/算术/比较、NULL、数组声明/下标/退化传参
+TEST(SemanticTest, PositivePointersAndArrays) {
+    std::string source = R"(int sum(int* a, int n) {
+    int s = 0;
+    for (int i = 0; i < n; i = i + 1) {
+        s = s + a[i];
+    }
+    return s;
+}
+int* pick(int* a) {
+    return &a[2];
+}
+int main() {
+    int a[10];
+    int i = 0;
+    while (i < 10) {
+        a[i] = i * 2;
+        i = i + 1;
+    }
+    int* p = a;
+    p = p + 1;
+    p = &a[5];
+    int x = *p;
+    *p = 7;
+    int* q = NULL;
+    q = p;
+    if (q != NULL) {
+        x = x + 1;
+    }
+    if (p > a + 3) {
+        x = x + 1;
+    }
+    char cbuf[8];
+    cbuf[0] = 'A';
+    char c = cbuf[0];
+    char* s = "hello";
+    return sum(a, 10) + x + c + (s != NULL);
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    for (const auto& diagnostic : result.diagnostics) {
+        ADD_FAILURE() << diagnostic.toString();
+    }
+}
+
+// 正例：字符串字面量类型为 char*，可赋给 char*、可整体再赋值；
+// 全局符号摘要包含指针与数组类型
+TEST(SemanticTest, PositiveStringLiteralAndGlobalSummary) {
+    std::string source = R"(int* gp;
+int garr[4];
+char* gstr = "global";
+int main() {
+    char* s = "NanoC";
+    gstr = s;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    for (const auto& diagnostic : result.diagnostics) {
+        ADD_FAILURE() << diagnostic.toString();
+    }
+    const SymbolSummary* gp = findGlobal(result, "gp");
+    ASSERT_TRUE(gp != nullptr);
+    EXPECT_EQ(gp->type, "int*");
+    const SymbolSummary* garr = findGlobal(result, "garr");
+    ASSERT_TRUE(garr != nullptr);
+    EXPECT_EQ(garr->type, "int[]");
+    const SymbolSummary* gstr = findGlobal(result, "gstr");
+    ASSERT_TRUE(gstr != nullptr);
+    EXPECT_EQ(gstr->type, "char*");
+}
+
+// 负例：解引用非指针
+TEST(SemanticTest, NegativeDereferenceNonPointer) {
+    std::string source = R"(int main() {
+    int x = 5;
+    int y = *x;
+    return y;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(
+      result,
+      { "test.nc:3:14: error: cannot dereference non-pointer type 'int'" });
+}
+
+// 负例：对右值取址（字面量与函数调用结果都不是左值）
+TEST(SemanticTest, NegativeAddressOfRvalue) {
+    std::string source = R"(int f() {
+    return 0;
+}
+int main() {
+    int* p = &5;
+    int* q = &f();
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:5:15: error: cannot take the address of an rvalue",
+                        "test.nc:6:16: error: cannot take the address of an rvalue" });
+}
+
+// 负例：对数组名取址（数组名已可退化为指针）
+TEST(SemanticTest, NegativeAddressOfArray) {
+    std::string source = R"(int main() {
+    int a[3];
+    int* p = &a;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(
+      result,
+      { "test.nc:3:15: error: cannot take the address of an array (it already "
+        "decays to a pointer)" });
+}
+
+// 负例：数组整体赋值（数组不是可拷贝左值）
+TEST(SemanticTest, NegativeArrayWholeAssign) {
+    std::string source = R"(int main() {
+    int a[3];
+    int b[3];
+    a = b;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:4:5: error: cannot assign to array 'a' (arrays are "
+                        "not copyable)" });
+}
+
+// 负例：数组初始化不支持（标量与数组来源各一）
+TEST(SemanticTest, NegativeArrayInitialization) {
+    std::string source = R"(int main() {
+    int b[3];
+    int a[3] = 5;
+    int c[3] = b;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:3:5: error: cannot convert 'int' to 'int[]' in "
+                        "initialization of 'a'",
+                        "test.nc:4:5: error: cannot copy array of type 'int[]' in "
+                        "initialization of 'c'" });
+}
+
+// 负例：指针类型不匹配的赋值与传参（int* 与 char* 互不相容）
+TEST(SemanticTest, NegativePointerTypeMismatch) {
+    std::string source = R"(int f(int* p) {
+    return *p;
+}
+int main() {
+    int* p;
+    char* s = "str";
+    p = s;
+    return f(s);
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:7:5: error: incompatible pointer types ('char*' to "
+                        "'int*') in assignment to 'p'",
+                        "test.nc:8:13: error: incompatible pointer types ('char*' to "
+                        "'int*') in argument 1 of call to 'f'" });
+}
+
+// 负例：多维数组声明
+TEST(SemanticTest, NegativeMultiDimArray) {
+    std::string source = R"(int main() {
+    int a[2][3];
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(
+      result,
+      { "test.nc:2:5: error: multidimensional arrays are not supported" });
+}
+
+// 负例：多级指针声明
+TEST(SemanticTest, NegativeMultiLevelPointer) {
+    std::string source = R"(int main() {
+    int** p;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(
+      result,
+      { "test.nc:2:5: error: multi-level pointers are not supported ('int**')" });
+}
+
+// 负例：对一级指针取址（会形成二级指针，同样不支持）
+TEST(SemanticTest, NegativeAddressOfPointerVariable) {
+    std::string source = R"(int main() {
+    int x = 1;
+    int* p = &x;
+    int** pp = &p;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:4:5: error: multi-level pointers are not supported "
+                        "('int**')",
+                        "test.nc:4:16: error: multi-level pointers are not supported" });
+}
+
+// 负例：字符串字面量赋给 int（char* 不能转标量）
+TEST(SemanticTest, NegativeStringToInt) {
+    std::string source = R"(int main() {
+    int x = "hello";
+    return x;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:2:5: error: cannot convert 'char*' to 'int' in "
+                        "initialization of 'x'" });
+}
+
+// 负例：标量赋给指针（非 0 常量不允许；空指针一律用 NULL）
+TEST(SemanticTest, NegativeIntToPointer) {
+    std::string source = R"(int main() {
+    int* p = 5;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:2:5: error: cannot convert 'int' to 'int*' in "
+                        "initialization of 'p'" });
+}
+
+// 负例：指针赋给标量
+TEST(SemanticTest, NegativePointerToScalar) {
+    std::string source = R"(int main() {
+    int x = 1;
+    int* p = &x;
+    int y = p;
+    return y;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:4:5: error: cannot convert 'int*' to 'int' in "
+                        "initialization of 'y'" });
+}
+
+// 负例：NULL 赋给标量（NULL 只与指针相容）
+TEST(SemanticTest, NegativeNullToScalar) {
+    std::string source = R"(int main() {
+    int x = NULL;
+    return x;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:2:5: error: cannot convert 'NULL' to 'int' in "
+                        "initialization of 'x'" });
+}
+
+// 负例：下标作用于非数组/非指针
+TEST(SemanticTest, NegativeSubscriptNonArray) {
+    std::string source = R"(int main() {
+    int x = 5;
+    x[0] = 1;
+    return x;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(
+      result,
+      { "test.nc:3:5: error: subscripted value is not an array or pointer" });
+}
+
+// 负例：下标不是整数（字符串字面量不能作下标）
+TEST(SemanticTest, NegativeSubscriptNonInteger) {
+    std::string source = R"(int main() {
+    int a[3];
+    a["x"] = 1;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:3:7: error: array subscript is not an integer" });
+}
+
+// 负例：不同类型指针比较
+TEST(SemanticTest, NegativePointerCompareDistinctTypes) {
+    std::string source = R"(int main() {
+    int* p;
+    char* s = "x";
+    return p == s;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:4:14: error: comparison between distinct pointer types "
+                        "'int*' and 'char*'" });
+}
+
+// 负例：指针与指针相减
+TEST(SemanticTest, NegativePointerSubtraction) {
+    std::string source = R"(int main() {
+    int a[5];
+    int* p = &a[1];
+    int* q = &a[3];
+    return q - p;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:5:14: error: pointer subtraction is not supported" });
+}
+
+// 负例：char* 解引用与下标（字符串按字节打包、VM 无字节级 LOAD，本里程碑拒绝）
+TEST(SemanticTest, NegativeCharPointerDereference) {
+    std::string source = R"(int main() {
+    char* s = "hi";
+    char c = *s;
+    char d = s[0];
+    return c + d;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(
+      result,
+      { "test.nc:3:15: error: cannot dereference 'char*' (string literals are "
+        "byte-packed; copy into a char array via a host function instead)",
+        "test.nc:4:14: error: cannot index through 'char*' (string literals are "
+        "byte-packed; copy into a char array via a host function instead)" });
+}
+
+// 负例：解引用 NULL
+TEST(SemanticTest, NegativeDereferenceNull) {
+    std::string source = R"(int main() {
+    int x = *NULL;
+    return x;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result, { "test.nc:2:14: error: cannot dereference 'NULL'" });
+}
+
+// 负例：对函数名取址（无函数指针）
+TEST(SemanticTest, NegativeAddressOfFunction) {
+    std::string source = R"(int f() {
+    return 0;
+}
+int main() {
+    int* p = &f;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:5:15: error: cannot take the address of function 'f'" });
+}
+
+// 负例：指针数组与零长度数组
+TEST(SemanticTest, NegativePointerArrayAndZeroSize) {
+    std::string source = R"(int main() {
+    int* a[3];
+    int b[0];
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:2:5: error: arrays of pointers are not supported "
+                        "('int*[...]')",
+                        "test.nc:3:5: error: array size must be positive" });
+}
+
+// 负例：void* 与 void 数组
+TEST(SemanticTest, NegativeVoidPointerAndVoidArray) {
+    std::string source = R"(int main() {
+    void* p;
+    void a[3];
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:2:5: error: 'void*' is not supported",
+                        "test.nc:3:5: error: cannot declare array of 'void'" });
+}
+
+// 负例：char 数组退化为 int*（基类型不符）
+TEST(SemanticTest, NegativeCharArrayToPointerOfOtherBase) {
+    std::string source = R"(int main() {
+    char cbuf[4];
+    int* p = cbuf;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:3:5: error: cannot convert 'char[]' to 'int*' in "
+                        "initialization of 'p'" });
+}

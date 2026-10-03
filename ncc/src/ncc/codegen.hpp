@@ -42,6 +42,9 @@ public:
     void visit(IdentifierExpr& node) override;
     void visit(IntegerLiteral& node) override;
     void visit(CharLiteral& node) override;
+    void visit(StringLiteral& node) override;
+    void visit(NullLiteral& node) override;
+    void visit(IndexExpr& node) override;
     void visit(StmtVarDeclaration& node) override;
 
 private:
@@ -53,7 +56,9 @@ private:
         int slot = 0;      // Local：帧槽位（1 起，地址 = BP - 4*slot）
         int argIndex = 0;  // StackArg：参数序号（1 起，地址 = BP + 4*(argIndex-3)）
         std::string label; // Global：数据段标号
-        std::string type;
+        std::string type;  // 规范类型名：int/char/int*/char*/int[]/char[]
+        bool isArray = false;
+        int arraySize = 0; // 数组元素数（isArray 时有效，每元素占 1 槽）
     };
 
     struct GlobalInit {
@@ -82,6 +87,8 @@ private:
     std::set<VarDeclaration*> m_registeredGlobals; // 防止重复登记同一声明
     std::vector<std::string> m_externs;            // 未定义的被调函数 → 宿主符号（callx）
     std::set<std::string> m_externSet;
+    std::map<std::string, std::string> m_stringLiterals;  // 字面量内容 → 数据标号（去重）
+    std::map<std::string, std::string> m_functionReturns; // 函数名 → 返回类型（规范名）
 
     // 输出
     void emit(const std::string& code);
@@ -93,9 +100,20 @@ private:
     void registerGlobal(VarDeclaration& node);
     void emitGlobalInits();
 
+    // 表达式静态类型（规范名）：供指针算术缩放与数组退化判定
+    std::string exprType(const Expr& expr) const;
+
     // 变量读写（v2.1 无 BP 相对寻址：地址先入寄存器，再 LOAD/STORE）
     void emitLoadVar(const Symbol& sym);
     void emitStoreVar(const Symbol& sym);
+
+    // 地址计算：目标地址放入 R0（变量/数组首元素/a[i]/*p）
+    void emitAddressOf(Expr& expr);
+    void emitAddressOfSymbol(const Symbol& sym);
+    void emitElementAddress(IndexExpr& node);
+
+    // 字符串字面量去重入数据段，返回标号
+    std::string internString(const std::string& content);
 
     // 条件分支：expr 为假/为真时跳 target（比较直接走 flags，不物化 0/1）
     void emitBranch(Expr& expr, const std::string& target, bool branchOnTrue);
