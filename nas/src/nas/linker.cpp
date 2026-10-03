@@ -1,6 +1,5 @@
 #include "nas/linker.hpp"
 #include "nas/instruction.hpp"
-#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>

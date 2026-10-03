@@ -1,11 +1,10 @@
 #include "nvm/core.hpp"
-#include "nvm/instructions.hpp"
-#include <ctype.h>
-#include <iostream>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
+#include <vector>
 
 void
 help_handler()
