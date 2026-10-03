@@ -21,6 +21,10 @@ constexpr int32_t IMPORT_FLAG_DYNAMIC = 0x4;
 constexpr int32_t DYNAMIC_HOST_BASE = 0x7E000000;
 constexpr int32_t DYNAMIC_HOST_STEP = 4;
 
+// NCI v2.1 文件头尺寸与魔数（规范 §2）
+constexpr int32_t NCI_HEADER_SIZE = 32;
+constexpr uint8_t NCI_MAGIC[8] = { 'N', 'a', 'n', 'o', 'C', '\0', '\0', '\0' };
+
 enum class NOpcode : uint8_t {
     LMM = 0x00,
     ST = 0x01,

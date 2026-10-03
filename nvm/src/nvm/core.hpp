@@ -9,10 +9,11 @@
 
 constexpr int32_t DEFAULT_STACK_SIZE = 8 * 1024 * 1024;
 
-// NCI v2.1 文件头尺寸与魔数（规范 §2；与 nas 侧 nas/instruction.hpp 同义异名，
-// 避免跨模块头文件依赖，理由同 DYNAMIC_IMPORT_FLAG）
-constexpr int32_t NCI_HEADER_SIZE = 32;
-constexpr uint8_t NCI_MAGIC[8] = { 'N', 'a', 'n', 'o', 'C', '\0', '\0', '\0' };
+// NCI v2.1 文件头尺寸与魔数（规范 §2）。与 nas 侧 nas/instruction.hpp 的
+// NCI_HEADER_SIZE/NCI_MAGIC 同义异名——tests 会把两模块头文件收进同一 TU，
+// 同名常量重定义冲突，命名须错开（先例见 DYNAMIC_IMPORT_FLAG）
+constexpr int32_t NCI_V21_HEADER_SIZE = 32;
+constexpr uint8_t NCI_V21_MAGIC[8] = { 'N', 'a', 'n', 'o', 'C', '\0', '\0', '\0' };
 
 // 动态链接宿主地址分配起点（宿主地址与代码段地址空间隔离）。
 // nas 对无地址 extern 分配的伪宿主地址区为 0x7E000000 起（DYNAMIC_HOST_BASE），

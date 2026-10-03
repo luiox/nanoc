@@ -53,63 +53,64 @@ namespace
         std::vector<bool> resolved; // imports 逐项：true = 命中导出，内部解析
     };
 
-    // 规范 §3.1 指令长度表；-1 = 未知操作码
+    // 规范 §3.1 指令长度表（opcode 取值用权威枚举 NOpcode 钉死，防手写 hex 漂移）；
+    // -1 = 未知操作码
     int
     instrLength(uint8_t op)
     {
         switch (op) {
-        case 0x00: // LMM R, IMM32
-        case 0x01: // ST R, ADDR32
-        case 0x02: // LEA R, ADDR32
-        case 0x05: // LOADA R, IMM32
-        case 0x06: // STOREA R, IMM32
-        case 0x11: // ADDI
-        case 0x13: // SUBI
-        case 0x15: // MULI
-        case 0x17: // DIVI
-        case 0x19: // MODI
-        case 0x21: // ANDI
-        case 0x23: // ORI
-        case 0x25: // XORI
-        case 0x31: // CMPI
+        case uint8_t(NOpcode::LMM):    // LMM R, IMM32
+        case uint8_t(NOpcode::ST):     // ST R, ADDR32
+        case uint8_t(NOpcode::LEA):    // LEA R, ADDR32
+        case uint8_t(NOpcode::LOADA):  // LOADA R, IMM32
+        case uint8_t(NOpcode::STOREA): // STOREA R, IMM32
+        case uint8_t(NOpcode::ADDI):   // ADDI
+        case uint8_t(NOpcode::SUBI):   // SUBI
+        case uint8_t(NOpcode::MULI):   // MULI
+        case uint8_t(NOpcode::DIVI):   // DIVI
+        case uint8_t(NOpcode::MODI):   // MODI
+        case uint8_t(NOpcode::ANDI):   // ANDI
+        case uint8_t(NOpcode::ORI):    // ORI
+        case uint8_t(NOpcode::XORI):   // XORI
+        case uint8_t(NOpcode::CMPI):   // CMPI
             return 6;
-        case 0x03: // LOAD R1, R2
-        case 0x04: // STORE R1, R2
-        case 0x10: // ADD
-        case 0x12: // SUB
-        case 0x14: // MUL
-        case 0x16: // DIV
-        case 0x18: // MOD
-        case 0x20: // AND
-        case 0x22: // OR
-        case 0x24: // XOR
-        case 0x26: // SHL
-        case 0x27: // SHLI R, IMM8
-        case 0x28: // SHR
-        case 0x29: // SHRI R, IMM8
-        case 0x30: // CMP
-        case 0x32: // TEST
-        case 0x43: // ENTER IMM16
-        case 0x70: // MOV
+        case uint8_t(NOpcode::LOAD):  // LOAD R1, R2
+        case uint8_t(NOpcode::STORE): // STORE R1, R2
+        case uint8_t(NOpcode::ADD):   // ADD
+        case uint8_t(NOpcode::SUB):   // SUB
+        case uint8_t(NOpcode::MUL):   // MUL
+        case uint8_t(NOpcode::DIV):   // DIV
+        case uint8_t(NOpcode::MOD):   // MOD
+        case uint8_t(NOpcode::AND):   // AND
+        case uint8_t(NOpcode::OR):    // OR
+        case uint8_t(NOpcode::XOR):   // XOR
+        case uint8_t(NOpcode::SHL):   // SHL
+        case uint8_t(NOpcode::SHLI):  // SHLI R, IMM8
+        case uint8_t(NOpcode::SHR):   // SHR
+        case uint8_t(NOpcode::SHRI):  // SHRI R, IMM8
+        case uint8_t(NOpcode::CMP):   // CMP
+        case uint8_t(NOpcode::TEST):  // TEST
+        case uint8_t(NOpcode::ENTER): // ENTER IMM16
+        case uint8_t(NOpcode::MOV):   // MOV
             return 3;
-        case 0x1A: // NOT
-        case 0x1B: // NEG
-        case 0x40: // PUSH
-        case 0x42: // POP
-        case 0x71: // CLR
+        case uint8_t(NOpcode::NOT):  // NOT
+        case uint8_t(NOpcode::NEG):  // NEG
+        case uint8_t(NOpcode::PUSH): // PUSH
+        case uint8_t(NOpcode::POP):  // POP
+        case uint8_t(NOpcode::CLR):  // CLR
             return 2;
-        case 0x41: // PUSHI IMM32
-        case 0x50: // JMP ADDR32
-        case 0x51: // JZ
-        case 0x52: // JNZ
-        case 0x53: // JN
-        case 0x54: // JP
-        case 0x60: // CALL ADDR32
-        case 0x61: // CALLX IMM32
+        case uint8_t(NOpcode::PUSHI): // PUSHI IMM32
+        case uint8_t(NOpcode::JMP):   // JMP ADDR32
+        case uint8_t(NOpcode::JZ):    // JZ
+        case uint8_t(NOpcode::JNZ):   // JNZ
+        case uint8_t(NOpcode::JN):    // JN
+        case uint8_t(NOpcode::JP):    // JP
+        case uint8_t(NOpcode::CALL):  // CALL ADDR32
+        case uint8_t(NOpcode::CALLX): // CALLX IMM32
             return 5;
-        case 0x44: // LEAVE
-        case 0x62: // RET
-        case 0x7F: // NOP
+        case uint8_t(NOpcode::LEAVE): // LEAVE
+        case uint8_t(NOpcode::RET):   // RET
+        case uint8_t(NOpcode::NOP):   // NOP
             return 1;
         default:
             return -1;
@@ -128,19 +129,19 @@ namespace
     addrKind(uint8_t op)
     {
         switch (op) {
-        case 0x01:
-        case 0x02:
-        case 0x05:
-        case 0x06:
+        case uint8_t(NOpcode::ST):
+        case uint8_t(NOpcode::LEA):
+        case uint8_t(NOpcode::LOADA):
+        case uint8_t(NOpcode::STOREA):
             return AddrKind::DATA;
-        case 0x50:
-        case 0x51:
-        case 0x52:
-        case 0x53:
-        case 0x54:
-        case 0x60:
+        case uint8_t(NOpcode::JMP):
+        case uint8_t(NOpcode::JZ):
+        case uint8_t(NOpcode::JNZ):
+        case uint8_t(NOpcode::JN):
+        case uint8_t(NOpcode::JP):
+        case uint8_t(NOpcode::CALL):
             return AddrKind::CODE;
-        case 0x61:
+        case uint8_t(NOpcode::CALLX):
             return AddrKind::CALLX;
         default:
             return AddrKind::NONE;
@@ -183,11 +184,12 @@ namespace
     bool
     parseModule(const std::vector<uint8_t> & img, ObjModule & m, std::string & err)
     {
-        if (img.size() < 32 || memcmp(img.data(), "NanoC\0\0\0", 8) != 0) {
+        if (img.size() < NCI_HEADER_SIZE
+            || memcmp(img.data(), NCI_MAGIC, sizeof(NCI_MAGIC)) != 0) {
             err = "坏魔数（期望 \"NanoC\\0\\0\\0\"）";
             return false;
         }
-        if (getI32(img, 8) != 32) {
+        if (getI32(img, 8) != NCI_HEADER_SIZE) {
             err = "不支持的 headerSize（期望 32）";
             return false;
         }
@@ -199,16 +201,17 @@ namespace
             err = "头部段/表大小为负";
             return false;
         }
-        if (32 + static_cast<int64_t>(m.codeSize) + m.dataSize
+        if (NCI_HEADER_SIZE + static_cast<int64_t>(m.codeSize) + m.dataSize
             > static_cast<int64_t>(img.size())) {
             err = "code/data 大小超出文件";
             return false;
         }
-        m.code.assign(img.begin() + 32, img.begin() + 32 + m.codeSize);
-        m.data.assign(img.begin() + 32 + m.codeSize,
-                      img.begin() + 32 + m.codeSize + m.dataSize);
+        m.code.assign(img.begin() + NCI_HEADER_SIZE,
+                      img.begin() + NCI_HEADER_SIZE + m.codeSize);
+        m.data.assign(img.begin() + NCI_HEADER_SIZE + m.codeSize,
+                      img.begin() + NCI_HEADER_SIZE + m.codeSize + m.dataSize);
 
-        size_t off = 32 + static_cast<size_t>(m.codeSize) + m.dataSize;
+        size_t off = NCI_HEADER_SIZE + static_cast<size_t>(m.codeSize) + m.dataSize;
         for (int32_t i = 0; i < importCount; ++i) {
             LinkImport im;
             if (!readTableEntry(img, off, im.name, im.addr, im.flags, err))
@@ -461,9 +464,8 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
 
     // ---- 序列化：header(32B) | code | data | import table | export table ----
     std::vector<uint8_t> & img = r.image;
-    const uint8_t magic[8] = { 'N', 'a', 'n', 'o', 'C', '\0', 0, 0 };
-    img.insert(img.end(), magic, magic + 8);
-    putI32(img, 32); // headerSize
+    img.insert(img.end(), NCI_MAGIC, NCI_MAGIC + sizeof(NCI_MAGIC));
+    putI32(img, NCI_HEADER_SIZE); // headerSize
     putI32(img, static_cast<int32_t>(outCode.size()));
     putI32(img, static_cast<int32_t>(outData.size()));
     putI32(img, static_cast<int32_t>(mergedImports.size()));

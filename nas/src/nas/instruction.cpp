@@ -1684,9 +1684,8 @@ Assembler::assemble(const std::string & source)
 
     // ---- 生成文件镜像 ----
     std::vector<uint8_t> & img = result.image;
-    const uint8_t magic[8] = { 'N', 'a', 'n', 'o', 'C', '\0', 0, 0 };
-    img.insert(img.end(), magic, magic + 8);
-    write32(img, 32); // headerSize
+    img.insert(img.end(), NCI_MAGIC, NCI_MAGIC + sizeof(NCI_MAGIC));
+    write32(img, NCI_HEADER_SIZE); // headerSize
     write32(img, codeSize);
     write32(img, dataSize);
     write32(img, static_cast<int32_t>(imports.size()));
