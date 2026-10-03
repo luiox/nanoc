@@ -82,10 +82,11 @@ xmake 从当前目录**向上**查找工程文件时总是取**最顶层**的 `x
 
 ## 已知边界（一期）
 
-1. **需要 `ncc --emit=c`**（PRD R3/R4 落地后的 ncc）。旧版 ncc 会自行报
+1. **需要 `ncc --emit=c`**（PRD R3/R4 已合入 #52/#47，#55 起亦支持
+   `--emit=llvm|obj|exe`）。旧版 ncc 会自行报
    `--emit=c is not supported yet`，按提示升级即可。
-2. **extern 调用 C 库函数**（`puts`/`printf` 等）依赖 R3 extern 声明；
-   未合入前，样例类纯计算程序以退出码承载结果。
+2. **extern 调用 C 库函数**（`puts`/`printf` 等）经 R3 extern 声明走 C 原生
+   链接，符号从系统库或 `add_links` 解析，无需宿主库。
 3. **依赖文件（-MMD）** 接入留给 R7/R8；本期 `.nc` 的增量粒度 = 整个目标
    重跑 ncc（整体编译模型本身如此，ncc 开销可忽略）。
 4. **C 编译选项**：生成的 `.c` 走目标的内置 C 规则，`add_cflags`/

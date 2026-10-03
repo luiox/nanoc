@@ -12,11 +12,13 @@ NVirtualMachine::executeCALL()
     }
 }
 
-// CALLX IMM32：双语义（链接器把解析到内部符号的 callx 站点改写为平移后的代码地址，
-// opcode 不变，见 doc/Bytecode Format Specification v2.1.md §2.2）：
+// CALLX IMM32：双语义（链接器已把解析为内部符号的 callx 站点直接改写为 CALL
+// 直调——CALL/CALLX 操作数同为 5 字节 IMM32，opcode 0x61→0x60，见 doc/Bytecode
+// Format Specification v2.1.md §2.2；本双语义仅为未链接/手写镜像的兼容快路径）：
 //   1. 0 < addr < codeSize → 内部地址：按 CALL 处理（压返回地址、跳转）。
 //      排除 addr=0：未解析的动态导入（addr=0）站点保持 imm=0，须走宿主路径报错，
-//      而不能误跳到内部地址 0（代价：callx 无法编码"调用内部地址 0"这一目标）
+//      而不能误跳到内部地址 0（代价：手写镜像中 callx 无法编码"调用内部地址 0"
+//      这一目标；链接镜像无此限制——链接器已把这类站点改写为 CALL）
 //   2. 否则查宿主函数表：命中则调用 C 函数（不压返回地址，返回值写 R0，pc 越过
 //      5 字节指令）；未命中为运行时错误，报错并停止执行。
 // 宿主地址空间与代码段隔离（HOST_ADDRESS_BASE 起），registerHostFunction 注册的

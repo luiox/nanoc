@@ -588,6 +588,22 @@ namespace ir {
                 return out;
             }
 
+            // 退出点包装（R10 defer）：把逆序拼接好的退出动作与原语句包成块；
+            // 无动作时原语句原样返回（return/break/continue 三路径共用）
+            std::unique_ptr<IrStmt>
+            wrapExitActions(std::unique_ptr<IrStmt> node,
+                            std::vector<std::unique_ptr<IrStmt>> actions) {
+                if (actions.empty()) {
+                    return node;
+                }
+                auto block = std::make_unique<IrBlockStmt>(node->line, node->column);
+                for (auto& action : actions) {
+                    block->statements.push_back(std::move(action));
+                }
+                block->statements.push_back(std::move(node));
+                return block;
+            }
+
             // ---- R10 defer ----
             // 作用域收口：块尾逆序追回注册的退出动作；有注册时把块替换为
             // IrDeferScopeStmt（Kind 不变，后端零改动；defers 留作 coro 挂接点）
@@ -1378,13 +1394,13 @@ namespace ir {
                         }
                         return node;
                     }
-                    auto node =
-                      std::make_unique<IrCallExpr>(call.callee,
-                                                   m_functionReturns.count(call.callee)
-                                                     ? m_functionReturns[call.callee]
-                                                     : IrType::Error,
-                                                   call.line,
-                                                   call.column);
+                    const auto knownReturn = m_functionReturns.find(call.callee);
+                    auto node = std::make_unique<IrCallExpr>(
+                      call.callee,
+                      knownReturn != m_functionReturns.end() ? knownReturn->second
+                                                             : IrType::Error,
+                      call.line,
+                      call.column);
                     for (const auto& argument : call.arguments) {
                         if (argument) {
                             node->arguments.push_back(lowerExpr(*argument));
@@ -1490,13 +1506,7 @@ namespace ir {
                 if (decl.initializer) {
                     init = lowerInitializer(*decl.initializer, declared);
                 }
-                declareVariable(decl.name, declared);
-                if (m_locals != nullptr) {
-                    IrLocal local;
-                    local.name = decl.name;
-                    local.type = declared;
-                    m_locals->push_back(std::move(local));
-                }
+                declareLocal(decl.name, declared);
                 return std::make_unique<IrLetStmt>(decl.name,
                                                    std::move(declared),
                                                    std::move(init),
@@ -1664,10 +1674,7 @@ namespace ir {
                     // 语义顺序（Go 语义）：返回值先求值固定 → 逆序执行 defer
                     // → 返回。返回值经隐藏临时回填，保证 defer 之后仍可用
                     std::vector<std::unique_ptr<IrStmt>> actions = collectExitActions(0);
-                    if (actions.empty()) {
-                        return node;
-                    }
-                    if (node->value != nullptr) {
+                    if (!actions.empty() && node->value != nullptr) {
                         const std::string temp =
                           "__ret" + std::to_string(m_deferCounter++);
                         declareLocal(temp, m_currentReturnType);
@@ -1681,12 +1688,7 @@ namespace ir {
                                                                  returnStmt.line,
                                                                  returnStmt.column);
                     }
-                    auto block = std::make_unique<IrBlockStmt>(stmt.line, stmt.column);
-                    for (auto& action : actions) {
-                        block->statements.push_back(std::move(action));
-                    }
-                    block->statements.push_back(std::move(node));
-                    return block;
+                    return wrapExitActions(std::move(node), std::move(actions));
                 }
 
                 case ASTNodeType::BREAK_STMT: {
@@ -1695,34 +1697,16 @@ namespace ir {
                     if (m_loopScopeBases.empty()) {
                         return node; // 语义层已报错；防御
                     }
-                    std::vector<std::unique_ptr<IrStmt>> actions =
-                      collectExitActions(m_loopScopeBases.back());
-                    if (actions.empty()) {
-                        return node;
-                    }
-                    auto block = std::make_unique<IrBlockStmt>(stmt.line, stmt.column);
-                    for (auto& action : actions) {
-                        block->statements.push_back(std::move(action));
-                    }
-                    block->statements.push_back(std::move(node));
-                    return block;
+                    return wrapExitActions(std::move(node),
+                                           collectExitActions(m_loopScopeBases.back()));
                 }
                 case ASTNodeType::CONTINUE_STMT: {
                     auto node = std::make_unique<IrContinueStmt>(stmt.line, stmt.column);
                     if (m_loopScopeBases.empty()) {
                         return node; // 语义层已报错；防御
                     }
-                    std::vector<std::unique_ptr<IrStmt>> actions =
-                      collectExitActions(m_loopScopeBases.back());
-                    if (actions.empty()) {
-                        return node;
-                    }
-                    auto block = std::make_unique<IrBlockStmt>(stmt.line, stmt.column);
-                    for (auto& action : actions) {
-                        block->statements.push_back(std::move(action));
-                    }
-                    block->statements.push_back(std::move(node));
-                    return block;
+                    return wrapExitActions(std::move(node),
+                                           collectExitActions(m_loopScopeBases.back()));
                 }
 
                 case ASTNodeType::DEFER_STMT: {
