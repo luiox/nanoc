@@ -4,6 +4,7 @@
 #include "ncc/ast.hpp"
 #include "ncc/lexer.hpp"
 #include <memory>
+#include <set>
 #include <vector>
 
 class Parser {
@@ -16,6 +17,8 @@ public:
 private:
     std::vector<Token> m_tokens;
     size_t m_pos;
+    int m_anonCounter = 0;                // 匿名 struct 内部标签计数（__anon_N）
+    std::set<std::string> m_typedefNames; // 已解析的 typedef 别名（文件作用域）
 
     // 辅助函数
     Token currentToken() const;
@@ -23,11 +26,16 @@ private:
     void advance();
     bool match(NTokenKind kind);
     bool expect(NTokenKind kind);
+    // 是否已登记的 typedef 别名（构造时对 token 预扫描收集，供语句分发消歧）
+    bool isTypedefName(const std::string& name) const;
 
     // 解析函数
     std::unique_ptr<Decl> parseDeclaration();
     std::unique_ptr<VarDeclaration> parseVarDeclaration();
     std::unique_ptr<FuncDeclaration> parseFuncDeclaration();
+    std::unique_ptr<Decl> parseTypedefDeclaration();
+    std::unique_ptr<StructDeclaration>
+    parseStructBody(const std::string& tag, int line, int column);
     std::unique_ptr<Stmt> parseStatement();
     std::unique_ptr<Stmt> parseVarDeclarationStmt();
     std::unique_ptr<CompoundStmt> parseCompoundStatement();
@@ -38,6 +46,11 @@ private:
     std::unique_ptr<BreakStmt> parseBreakStatement();
     std::unique_ptr<ContinueStmt> parseContinueStatement();
     std::unique_ptr<ExprStmt> parseExprStatement();
+
+    // 类型前缀：builtin 关键字或 `struct Tag`；line/column 返回首个 token 位置
+    std::string parseTypePrefix(bool& isStructTag, int& line, int& column);
+    // 声明初始化：`{ e1, e2 }` → InitListExpr，否则普通表达式
+    std::unique_ptr<Expr> parseInitializer();
 
     // 表达式解析
     std::unique_ptr<Expr> parseExpression();

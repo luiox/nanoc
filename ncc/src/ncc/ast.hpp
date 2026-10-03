@@ -13,6 +13,8 @@ enum class ASTNodeType {
     // 声明
     VAR_DECLARATION,
     FUNC_DECLARATION,
+    STRUCT_DECLARATION, // struct 定义/前向声明（PRD R1.2 第二批）
+    TYPEDEF_DECLARATION,
 
     // 语句
     COMPOUND_STMT,
@@ -35,6 +37,8 @@ enum class ASTNodeType {
     STRING_LITERAL,
     NULL_LITERAL,
     INDEX_EXPR,
+    MEMBER_EXPR,    // p.x / p->x 成员访问（PRD R1.2 第二批）
+    INIT_LIST_EXPR, // { e1, e2, ... } 逐成员初始化器（PRD R1.2 第二批）
 
     // 其他
     PARAMETER,
@@ -87,13 +91,15 @@ public:
 
 // 变量声明节点
 // 类型字段（PRD R1.2）：
-// - type：基础类型名（int/char/void）
+// - type：基础类型名（int/char/void、struct 标签或 typedef 别名）
+// - isStructTag：type 带 struct 前缀（struct Point p），type 存标签名
 // - pointerDepth：指针层级（0=值，1=一级指针；≥2 由语义分析显式报不支持）
 // - isArray/arraySize/arrayDims：一维数组（arrayDims≥2 由语义分析显式报不支持）
 class VarDeclaration : public Decl {
 public:
     std::string type;
     std::string name;
+    bool isStructTag = false;
     int pointerDepth = 0;
     bool isArray = false;
     int arraySize = 0;
@@ -110,13 +116,49 @@ public:
 class FuncDeclaration : public Decl {
 public:
     std::string returnType;
-    int returnPointerDepth = 0; // 返回类型指针层级（0=值，1=指针）
+    bool returnIsStruct = false; // 返回类型带 struct 前缀（struct Point f()）
+    int returnPointerDepth = 0;  // 返回类型指针层级（0=值，1=指针）
     std::string name;
     std::vector<std::unique_ptr<VarDeclaration>> parameters;
     std::unique_ptr<Stmt> body;
 
     FuncDeclaration(const std::string& rt, const std::string& n, int l, int c)
       : Decl(ASTNodeType::FUNC_DECLARATION, l, c), returnType(rt), name(n) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
+// struct 定义或前向声明节点（PRD R1.2 第二批）
+// - `struct Point { int x; int y; };` → tag="Point"，fields 非空
+// - `struct Node;` → isForward=true
+// - 匿名定义仅经 typedef 出现（typedef struct { ... } Alias;），tag 为空，
+//   由解析器生成内部标签 __anon_N 挂到 TypedefDeclaration::structDef 上
+// 成员复用 VarDeclaration（不含初始化器，isStructTag 引用已定义的 struct 标签）
+class StructDeclaration : public Decl {
+public:
+    std::string tag;
+    bool isForward = false;
+    std::vector<std::unique_ptr<VarDeclaration>> fields;
+
+    StructDeclaration(const std::string& t, int l, int c)
+      : Decl(ASTNodeType::STRUCT_DECLARATION, l, c), tag(t) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
+// typedef 声明节点（PRD R1.2 第二批）
+// 形态：typedef int MyInt; / typedef struct Point PointT;
+//       typedef struct { ... } Anonymous;（structDef 非空）/ typedef int* IntPtr;
+class TypedefDeclaration : public Decl {
+public:
+    std::string baseType;                         // 基础类型名（int/char/标签/别名）
+    bool baseIsStruct = false;                    // baseType 带 struct 前缀
+    int pointerDepth = 0;                         // 别名上的指针层级
+    std::string alias;                            // 别名
+    std::unique_ptr<StructDeclaration> structDef; // 内联 struct 定义（可空）
+
+    TypedefDeclaration(const std::string& aliasName, int l, int c)
+      : Decl(ASTNodeType::TYPEDEF_DECLARATION, l, c), alias(aliasName) {}
 
     void accept(ASTVisitor& visitor) override;
 };
@@ -204,11 +246,12 @@ public:
 };
 
 // 变量声明语句节点（用于在语句上下文中声明变量）
-// 字段语义与 VarDeclaration 相同（指针/数组扩展见其注释）
+// 字段语义与 VarDeclaration 相同（指针/数组/struct 扩展见其注释）
 class StmtVarDeclaration : public Stmt {
 public:
     std::string type;
     std::string name;
+    bool isStructTag = false;
     int pointerDepth = 0;
     bool isArray = false;
     int arraySize = 0;
@@ -337,6 +380,32 @@ public:
     void accept(ASTVisitor& visitor) override;
 };
 
+// 成员访问表达式节点（PRD R1.2 第二批）：p.x（dot）或 p->x（arrow）
+// arrow 形态等价 (*p).x；既作右值也作左值（p.x = v，经 AssignExpr.target）
+class MemberExpr : public Expr {
+public:
+    std::unique_ptr<Expr> base;
+    std::string member;
+    bool arrow = false;
+
+    MemberExpr(std::unique_ptr<Expr> b, const std::string& m, bool isArrow, int l, int c)
+      : Expr(ASTNodeType::MEMBER_EXPR, l, c), base(std::move(b)), member(m),
+        arrow(isArrow) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
+// 逐成员初始化器节点（PRD R1.2 第二批）：{ e1, e2, ... }
+// 仅允许作为 struct 变量声明的初始化器；不支持嵌套初始化器
+class InitListExpr : public Expr {
+public:
+    std::vector<std::unique_ptr<Expr>> values;
+
+    InitListExpr(int l, int c) : Expr(ASTNodeType::INIT_LIST_EXPR, l, c) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
 // AST访问者接口
 class ASTVisitor {
 public:
@@ -345,6 +414,8 @@ public:
     virtual void visit(Program& node) = 0;
     virtual void visit(VarDeclaration& node) = 0;
     virtual void visit(FuncDeclaration& node) = 0;
+    virtual void visit(StructDeclaration& node) = 0;
+    virtual void visit(TypedefDeclaration& node) = 0;
     virtual void visit(CompoundStmt& node) = 0;
     virtual void visit(IfStmt& node) = 0;
     virtual void visit(WhileStmt& node) = 0;
@@ -363,6 +434,8 @@ public:
     virtual void visit(StringLiteral& node) = 0;
     virtual void visit(NullLiteral& node) = 0;
     virtual void visit(IndexExpr& node) = 0;
+    virtual void visit(MemberExpr& node) = 0;
+    virtual void visit(InitListExpr& node) = 0;
     virtual void visit(StmtVarDeclaration& node) = 0;
 };
 

@@ -1065,3 +1065,447 @@ TEST(SemanticTest, NegativeCharArrayToPointerOfOtherBase) {
                       { "test.nc:3:5: error: cannot convert 'char[]' to 'int*' in "
                         "initialization of 'p'" });
 }
+
+// ---------------------------------------------------------------------------
+// R1.2 类型系统扩展（第二批）：struct 与 typedef
+// ---------------------------------------------------------------------------
+
+// 正例：struct 定义/成员访问/嵌套成员链/整体拷贝/struct 数组/初始化器/
+// 按值传参/struct 返回/自引用指针/前向声明/typedef 各形态
+TEST(SemanticTest, PositiveStructAndTypedef) {
+    std::string source = R"(struct Node;
+typedef struct Node NodeT;
+struct Node { struct Node* next; int v; };
+struct Point { int x; int y; };
+struct Rect { struct Point tl; struct Point br; };
+typedef int MyInt;
+typedef struct Point PointT;
+typedef struct { int w; int h; } Pair;
+
+int area(struct Rect r) {
+    return (r.br.x - r.tl.x) * (r.br.y - r.tl.y);
+}
+struct Point make(int x, int y) {
+    struct Point p = {x, y};
+    return p;
+}
+int pairSum(Pair p) {
+    return p.w + p.h;
+}
+NodeT gnode;
+int main() {
+    struct Point p = make(2, 3);
+    PointT q = p;
+    q.x = 10;
+    struct Rect r;
+    r.tl = p;
+    r.br = make(5, 7);
+    struct Point arr[3];
+    arr[0] = p;
+    arr[1].x = 4;
+    NodeT n;
+    n.v = 1;
+    n.next = NULL;
+    struct Node* pn = &n;
+    pn = pn->next;
+    MyInt k = 5;
+    Pair pr = {1, 2};
+    int total = area(r) + pairSum(pr) + arr[1].x + q.x + k;
+    if (pn == NULL) {
+        total = total + 1;
+    }
+    return total + p.y;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    for (const auto& diagnostic : result.diagnostics) {
+        ADD_FAILURE() << diagnostic.toString();
+    }
+
+    // 全局符号摘要：struct 类型名与参数类型可读
+    const SymbolSummary* area = findGlobal(result, "area");
+    ASSERT_TRUE(area != nullptr);
+    EXPECT_EQ(area->type, "int");
+    ASSERT_EQ(area->paramTypes.len(), 1u);
+    EXPECT_EQ(area->paramTypes[0], "struct Rect");
+
+    const SymbolSummary* make = findGlobal(result, "make");
+    ASSERT_TRUE(make != nullptr);
+    EXPECT_EQ(make->type, "struct Point");
+
+    const SymbolSummary* gnode = findGlobal(result, "gnode");
+    ASSERT_TRUE(gnode != nullptr);
+    EXPECT_EQ(gnode->type, "struct Node");
+}
+
+// 负例：未知成员（诊断落在 `.` 运算符位置）
+TEST(SemanticTest, NegativeStructUnknownMember) {
+    std::string source = R"(struct Point { int x; int y; };
+int main() {
+    struct Point p;
+    int z = p.z;
+    return z;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:4:14: error: struct 'Point' has no member named 'z'" });
+}
+
+// 负例：标量取成员
+TEST(SemanticTest, NegativeMemberOnScalar) {
+    std::string source = R"(int main() {
+    int i = 1;
+    int z = i.x;
+    return z;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:3:13: error: member access on non-struct type 'int'" });
+}
+
+// 负例：struct 指针用 dot（应使用 ->）
+TEST(SemanticTest, NegativeDotOnStructPointer) {
+    std::string source = R"(struct Point { int x; int y; };
+int main() {
+    struct Point p;
+    struct Point* pp = &p;
+    int z = pp.x;
+    return z;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:5:13: error: member access through pointer type "
+                        "'struct Point*'; use '->'" });
+}
+
+// 负例：-> 用于非指针
+TEST(SemanticTest, NegativeArrowOnNonPointer) {
+    std::string source = R"(int main() {
+    int x = 1;
+    int z = x->y;
+    return z;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(
+      result,
+      { "test.nc:3:13: error: '->' requires a pointer to struct, but operand has "
+        "type 'int'" });
+}
+
+// 负例：-> 用于非 struct 指针
+TEST(SemanticTest, NegativeArrowOnNonStructPointer) {
+    std::string source = R"(int main() {
+    int* p;
+    int z = p->x;
+    return z;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(
+      result,
+      { "test.nc:3:13: error: '->' requires a pointer to struct, but operand has "
+        "type 'int*'" });
+}
+
+// 负例：struct 与标量混算
+TEST(SemanticTest, NegativeStructScalarArithmetic) {
+    std::string source = R"(struct Point { int x; int y; };
+int main() {
+    struct Point p;
+    int z = p + 1;
+    return z;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result, { "test.nc:4:15: error: invalid operands to binary '+'" });
+}
+
+// 负例：不同 struct 之间赋值
+TEST(SemanticTest, NegativeStructAssignMismatch) {
+    std::string source = R"(struct Point { int x; int y; };
+struct Rect { int w; int h; };
+int main() {
+    struct Point p;
+    struct Rect r;
+    p = r;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:6:5: error: cannot convert 'struct Rect' to "
+                        "'struct Point' in assignment to 'p'" });
+}
+
+// 负例：struct 赋给标量
+TEST(SemanticTest, NegativeStructToScalar) {
+    std::string source = R"(struct Point { int x; int y; };
+int main() {
+    struct Point p;
+    int x = p;
+    return x;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:4:5: error: cannot convert 'struct Point' to 'int' "
+                        "in initialization of 'x'" });
+}
+
+// 负例：重复成员名
+TEST(SemanticTest, NegativeDuplicateMember) {
+    std::string source = R"(struct Point { int x; int x; };
+int main() { return 0; }
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:1:23: error: duplicate member 'x' in 'struct Point'" });
+}
+
+// 负例：typedef 重定义
+TEST(SemanticTest, NegativeTypedefRedefinition) {
+    std::string source = R"(typedef int T;
+typedef char T;
+int main() { return 0; }
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result, { "test.nc:2:1: error: redefinition of 'T'" });
+}
+
+// 负例：struct 标签重复完整定义（前向声明 + 定义则合法）
+TEST(SemanticTest, NegativeStructTagRedefinition) {
+    std::string source = R"(struct P { int a; };
+struct P { int b; };
+int main() { return 0; }
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result, { "test.nc:2:1: error: redefinition of 'struct P'" });
+}
+
+// 负例：自引用值成员（incomplete，仅自引用指针合法）
+TEST(SemanticTest, NegativeSelfReferenceByValue) {
+    std::string source = R"(struct A { struct A a; };
+int main() { return 0; }
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:1:12: error: field 'a' has incomplete type "
+                        "'struct A'" });
+}
+
+// 负例：引用未定义的 struct 类型
+TEST(SemanticTest, NegativeUnknownStructType) {
+    std::string source = R"(int main() {
+    struct Unknown p;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result, { "test.nc:2:5: error: unknown type 'struct Unknown'" });
+}
+
+// 负例：typedef 名带 struct 前缀（类型命名空间内 tag 与别名同查）
+TEST(SemanticTest, NegativeTypedefWithStructPrefix) {
+    std::string source = R"(typedef int T;
+int main() {
+    struct T p;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result, { "test.nc:3:5: error: unknown type 'struct T'" });
+}
+
+// 负例：struct 实参传给不兼容的 struct 形参（诊断落在调用点）
+TEST(SemanticTest, NegativeStructArgumentMismatch) {
+    std::string source = R"(struct A { int x; };
+struct B { int y; };
+int f(struct A a) {
+    return a.x;
+}
+int main() {
+    struct B b;
+    return f(b);
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:8:13: error: cannot convert 'struct B' to "
+                        "'struct A' in argument 1 of call to 'f'" });
+}
+
+// 负例：初始化器长度不符
+TEST(SemanticTest, NegativeInitializerLengthMismatch) {
+    std::string source = R"(struct Point { int x; int y; };
+int main() {
+    struct Point p = {1};
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:3:5: error: initializer for struct 'Point' expects 2 "
+                        "value(s), but got 1" });
+}
+
+// 负例：初始化器成员类型不符（诊断落在对应成员表达式）
+TEST(SemanticTest, NegativeInitializerFieldTypeMismatch) {
+    std::string source = R"(struct Point { int x; int y; };
+int main() {
+    struct Point p = {1, "s"};
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:3:26: error: cannot convert 'char*' to 'int' in "
+                        "initialization of field 'y' of 'p'" });
+}
+
+// 负例：前向声明后未定义即实例化（incomplete）
+TEST(SemanticTest, NegativeIncompleteVariable) {
+    std::string source = R"(struct Fwd;
+int main() {
+    struct Fwd f;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:3:5: error: variable 'f' has incomplete type "
+                        "'struct Fwd'" });
+}
+
+// 负例：incomplete struct 作参数类型
+TEST(SemanticTest, NegativeIncompleteParameter) {
+    std::string source = R"(struct Fwd;
+int f(struct Fwd g) {
+    return 0;
+}
+int main() { return 0; }
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:2:1: error: parameter 'g' has incomplete type "
+                        "'struct Fwd'" });
+}
+
+// 负例：incomplete struct 作返回类型
+TEST(SemanticTest, NegativeIncompleteReturnType) {
+    std::string source = R"(struct Fwd;
+struct Fwd f() {
+    struct Fwd g;
+    return g;
+}
+int main() { return 0; }
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:2:1: error: function 'f' has incomplete return type "
+                        "'struct Fwd'",
+                        "test.nc:3:5: error: variable 'g' has incomplete type "
+                        "'struct Fwd'" });
+}
+
+// 负例：incomplete struct 指针解引用取成员
+TEST(SemanticTest, NegativeMemberAccessIntoIncomplete) {
+    std::string source = R"(struct Fwd;
+int main() {
+    struct Fwd* p;
+    int x = p->a;
+    return x;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:4:13: error: member access into incomplete type "
+                        "'struct Fwd'" });
+}
+
+// 负例：struct 数组带初始化器（嵌套/数组初始化器均不支持）
+TEST(SemanticTest, NegativeStructArrayInitializer) {
+    std::string source = R"(struct Point { int x; int y; };
+int main() {
+    struct Point a[2] = {1, 2};
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:3:5: error: array initializers are not supported" });
+}
+
+// 负例：标量目标使用花括号初始化器
+TEST(SemanticTest, NegativeBraceInitializerOnScalar) {
+    std::string source = R"(int main() {
+    int x = {1};
+    return x;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:2:5: error: brace initializer is only supported for "
+                        "struct types" });
+}
+
+// 负例：struct 值作条件
+TEST(SemanticTest, NegativeStructCondition) {
+    std::string source = R"(struct Point { int x; int y; };
+int main() {
+    struct Point p;
+    if (p) {
+        return 1;
+    }
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:4:9: error: struct value used as condition "
+                        "('struct Point')" });
+}
+
+// 负例：数组成员整体赋值（数组不可拷贝）
+TEST(SemanticTest, NegativeArrayMemberAssign) {
+    std::string source = R"(struct S { int arr[3]; };
+int main() {
+    struct S a;
+    struct S b;
+    a.arr = b.arr;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result,
+                      { "test.nc:5:6: error: cannot assign to array member 'arr' "
+                        "(arrays are not copyable)" });
+}
+
+// 负例：struct 值比较
+TEST(SemanticTest, NegativeStructCompare) {
+    std::string source = R"(struct Point { int x; int y; };
+int main() {
+    struct Point p;
+    struct Point q;
+    return p == q;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result, { "test.nc:5:14: error: invalid operands to binary '=='" });
+}
+
+// 负例：匿名 struct 的内部标签不可直接引用
+TEST(SemanticTest, NegativeAnonymousStructNotReferable) {
+    std::string source = R"(typedef struct { int w; } Pair;
+int main() {
+    struct Pair p;
+    return 0;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result, { "test.nc:3:5: error: unknown type 'struct Pair'" });
+}

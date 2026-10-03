@@ -18,7 +18,9 @@ enum class NTokenKind : int {
     KEYWORD_RETURN,
     KEYWORD_BREAK,
     KEYWORD_CONTINUE,
-    KEYWORD_NULL, // NULL：空指针常量（PRD R1.2）
+    KEYWORD_NULL,    // NULL：空指针常量（PRD R1.2）
+    KEYWORD_STRUCT,  // struct：结构体定义/类型引用（PRD R1.2 第二批）
+    KEYWORD_TYPEDEF, // typedef：类型别名（PRD R1.2 第二批）
 
     // Identifiers
     IDENTIFIER,
@@ -45,6 +47,8 @@ enum class NTokenKind : int {
     OPERATOR_LOGICAL_OR,    // ||
     OPERATOR_LOGICAL_NOT,   // !
     OPERATOR_AMPERSAND,     // &（取址；&& 已由 LOGICAL_AND 消化）
+    OPERATOR_DOT,           // .（struct 成员访问，PRD R1.2 第二批）
+    OPERATOR_ARROW,         // ->（struct 指针成员访问，PRD R1.2 第二批）
 
     // Delimiters
     DELIMITER_SEMICOLON, // ;

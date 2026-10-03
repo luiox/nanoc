@@ -378,3 +378,175 @@ TEST(CodegenTest, ArrayDecayOnArgumentPassing) {
     // 形参 a[i]：指针经槽位载入后再变址
     EXPECT_TRUE(assembly.find("load R0, [R6]") != std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// R1.2 类型系统扩展（第二批）：struct 布局 / 成员寻址 / 拷贝 / sret
+// ---------------------------------------------------------------------------
+
+// struct 局部布局：struct Point 占 2 槽、局部 v 1 槽 → enter 12；
+// 基址 = BP-8（2 槽块内最低地址），p.y 偏移 4
+TEST(CodegenTest, StructLocalLayoutAndMemberAddressing) {
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "int main() {\n"
+                                   "    struct Point p;\n"
+                                   "    p.x = 3;\n"
+                                   "    int v = p.y;\n"
+                                   "    return v;\n"
+                                   "}");
+
+    EXPECT_TRUE(assembly.find("enter 12") != std::string::npos);
+    EXPECT_TRUE(assembly.find("subi R0, 8") != std::string::npos);
+    EXPECT_TRUE(assembly.find("addi R0, 4") != std::string::npos);
+    EXPECT_TRUE(assembly.find("store [R6], R0") != std::string::npos);
+    EXPECT_TRUE(assembly.find("load R0, [R0]") != std::string::npos);
+}
+
+// struct 嵌套布局：Rect = 2×Point = 4 字 → enter 16；r.br.y 偏移 3 字 = 12
+TEST(CodegenTest, StructNestedMemberOffset) {
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "struct Rect { struct Point tl; struct Point br; };\n"
+                                   "int main() {\n"
+                                   "    struct Rect r;\n"
+                                   "    r.tl.x = 1;\n"
+                                   "    r.br.y = 2;\n"
+                                   "    return 0;\n"
+                                   "}");
+
+    EXPECT_TRUE(assembly.find("enter 16") != std::string::npos);
+    // 成员链逐级累加偏移：r.br → +8（tl 占 2 字），再 .y → +4
+    EXPECT_EQ(countOf(assembly, "addi R0, 8"), (std::size_t)1);
+    EXPECT_EQ(countOf(assembly, "addi R0, 4"), (std::size_t)1);
+}
+
+// struct 整体赋值：逐字拷贝（Point 2 字），源地址 pop 进 R1、目的地址 mov R2, R0
+TEST(CodegenTest, StructWholeAssignmentCopy) {
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "int main() {\n"
+                                   "    struct Point p;\n"
+                                   "    struct Point q;\n"
+                                   "    p.x = 1;\n"
+                                   "    q = p;\n"
+                                   "    return 0;\n"
+                                   "}");
+
+    // emitPopCopyPush 专用序列
+    EXPECT_TRUE(assembly.find("pop R1") != std::string::npos);
+    EXPECT_TRUE(assembly.find("mov R2, R0") != std::string::npos);
+    // 拷贝 2 字：至少 2 次 load/store；目的基址 = q 槽（BP-16）
+    EXPECT_GE(countOf(assembly, "load R0, [R6]"), (std::size_t)2);
+    EXPECT_TRUE(assembly.find("subi R0, 16") != std::string::npos);
+}
+
+// struct 按值传参：实参拷贝到调用者临时槽，副本地址作 fastcall 实参；
+// 形参槽位存地址 → 成员访问双重间接
+TEST(CodegenTest, StructArgumentPassByValueCopy) {
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "int sum(struct Point p) { return p.x + p.y; }\n"
+                                   "int main() {\n"
+                                   "    struct Point a;\n"
+                                   "    return sum(a);\n"
+                                   "}");
+
+    EXPECT_TRUE(assembly.find("call sum") != std::string::npos);
+    // 调用者：副本地址 = BP - 4*slot
+    EXPECT_TRUE(assembly.find("subi R0,") != std::string::npos);
+    // 被调者：形参槽位存地址 → load R0, [R6] 取地址，再间接取成员
+    EXPECT_TRUE(assembly.find("load R0, [R6]") != std::string::npos);
+}
+
+// struct 返回（sret）：调用者 R7 传接收槽地址；被调者序言保存 R7，
+// return 时逐字拷贝到 [R7]
+TEST(CodegenTest, StructReturnSret) {
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "struct Point make(int x, int y) {\n"
+                                   "    struct Point p = {x, y};\n"
+                                   "    return p;\n"
+                                   "}\n"
+                                   "int main() {\n"
+                                   "    struct Point a = make(1, 2);\n"
+                                   "    return a.x;\n"
+                                   "}");
+
+    // 调用者：mov R7, R5 + subi R7, <slot>
+    EXPECT_TRUE(assembly.find("mov R7, R5") != std::string::npos);
+    EXPECT_TRUE(assembly.find("subi R7,") != std::string::npos);
+    // 被调者：R7 溢出到专用槽
+    EXPECT_TRUE(assembly.find("store [R6], R7") != std::string::npos);
+    // 返回拷贝：load R2, [R6] 取回接收槽地址
+    EXPECT_TRUE(assembly.find("load R2, [R6]") != std::string::npos);
+}
+
+// struct 数组：元素按布局字数缩放（Point 2 字 → a[1] 变址 ×8；3 元素 6 槽）
+TEST(CodegenTest, StructArrayElementScaling) {
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "int main() {\n"
+                                   "    struct Point a[3];\n"
+                                   "    a[1].x = 5;\n"
+                                   "    return 0;\n"
+                                   "}");
+
+    EXPECT_TRUE(assembly.find("enter 24") != std::string::npos);
+    EXPECT_TRUE(assembly.find("lmm R2, 8") != std::string::npos);
+    EXPECT_TRUE(assembly.find("mul R1, R2") != std::string::npos);
+}
+
+// struct 指针算术：p + 1 按指向类型大小缩放（Point 2 字 → ×8）
+TEST(CodegenTest, StructPointerArithmeticScaling) {
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "int main() {\n"
+                                   "    struct Point a[3];\n"
+                                   "    struct Point* p = a;\n"
+                                   "    p = p + 1;\n"
+                                   "    return 0;\n"
+                                   "}");
+
+    EXPECT_TRUE(assembly.find("lmm R2, 8") != std::string::npos);
+    EXPECT_TRUE(assembly.find("add R0, R1") != std::string::npos);
+}
+
+// 全局 struct：数据段按布局字数排布（Point 2 字 + Rect 4 字 = 6 个 dd 0）
+TEST(CodegenTest, GlobalStructDataSegment) {
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "struct Rect { struct Point tl; struct Point br; };\n"
+                                   "struct Point g;\n"
+                                   "struct Rect gr;\n"
+                                   "int main() { return 0; }");
+
+    EXPECT_TRUE(assembly.find(".g_g:") != std::string::npos);
+    EXPECT_TRUE(assembly.find(".g_gr:") != std::string::npos);
+    EXPECT_EQ(countOf(assembly, "dd 0"), (std::size_t)6);
+}
+
+// 全局 struct 初始化器：逐成员发射到 标号+偏移
+TEST(CodegenTest, GlobalStructInitializerOffsets) {
+    std::string assembly = compile("struct Point { int x; int y; };\n"
+                                   "struct Point g = {7, 8};\n"
+                                   "int main() { return g.x; }");
+
+    EXPECT_TRUE(assembly.find("lmm R0, 7") != std::string::npos);
+    EXPECT_TRUE(assembly.find("lmm R0, 8") != std::string::npos);
+    EXPECT_TRUE(assembly.find("lea R6, .g_g") != std::string::npos);
+    EXPECT_TRUE(assembly.find("addi R6, 4") != std::string::npos); // 第二个成员
+}
+
+// typedef 透明性：别名声明生成的函数体与裸 struct 完全一致
+TEST(CodegenTest, TypedefTransparentCodegen) {
+    std::string viaAlias = compile("typedef struct { int x; int y; } Pair;\n"
+                                   "int main() {\n"
+                                   "    Pair p;\n"
+                                   "    p.x = 3;\n"
+                                   "    int v = p.y;\n"
+                                   "    return v;\n"
+                                   "}");
+    std::string viaTag = compile("struct Anon { int x; int y; };\n"
+                                 "int main() {\n"
+                                 "    struct Anon p;\n"
+                                 "    p.x = 3;\n"
+                                 "    int v = p.y;\n"
+                                 "    return v;\n"
+                                 "}");
+
+    const std::string aliasBody = viaAlias.substr(viaAlias.find("main:"));
+    const std::string tagBody = viaTag.substr(viaTag.find("main:"));
+    EXPECT_EQ(aliasBody, tagBody);
+}
