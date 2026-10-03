@@ -179,13 +179,63 @@ TEST(AssemblerV21Test, CallingConventionFlags) {
     assembleFail(".calling_convention pascal\n", 1);
 }
 
-// extern 无地址 = 0（动态链接位）；重复声明后者生效
+// extern 无地址 = 动态导入（伪地址 + bit2）；重复声明后者生效（显式地址转静态）
 TEST(AssemblerV21Test, ExternDefaultsAndOverrides) {
     AssemblyResult r = assembleOk("extern malloc\n"
                                   "extern malloc 0x2000\n");
     size_t e0 = importEntryOffset(r.image, 0);
     EXPECT_EQ(rd32(r.image, 20), 1u); // 只保留一条
     EXPECT_EQ(rd32(r.image, e0 + 12), 0x2000u);
+}
+
+// 读取第 which 个导入 entry 的 addr/flags 字段（跳过变长名部）
+namespace {
+    std::pair<uint32_t, uint32_t> importEntryAddrFlags(const std::vector<uint8_t>& img,
+                                                       int which) {
+        size_t off = importEntryOffset(img, which);
+        int32_t nameLen = (int32_t)rd32(img, off);
+        size_t namePart = 4 + (size_t)nameLen + 1;
+        size_t addrOff = off + namePart + ((4 - namePart % 4) % 4);
+        return { rd32(img, addrOff), rd32(img, addrOff + 4) };
+    }
+} // namespace
+
+// 无地址 extern 分配确定性伪宿主地址（0x7E000000 起按声明序 +4），flags bit2
+// 置位（与约定位叠加），callx 站点 imm 回填同值伪地址
+TEST(AssemblerV21Test, DynamicExternPseudoAddress) {
+    AssemblyResult r = assembleOk("extern puts\n"
+                                  ".calling_convention cdecl\n"
+                                  "extern printf\n"
+                                  "extern abs\n"
+                                  "main:\n"
+                                  "    callx puts\n"
+                                  "    ret\n");
+    ASSERT_EQ(rd32(r.image, 20), 3u);
+    auto [a0, f0] = importEntryAddrFlags(r.image, 0); // puts：fastcall + 动态
+    auto [a1, f1] = importEntryAddrFlags(r.image, 1); // printf：cdecl + 动态
+    auto [a2, f2] = importEntryAddrFlags(r.image, 2); // abs：cdecl 顺延生效 + 动态
+    EXPECT_EQ(a0, 0x7E000000u);
+    EXPECT_EQ(a1, 0x7E000004u);
+    EXPECT_EQ(a2, 0x7E000008u);
+    EXPECT_EQ(f0, 0x4u); // fastcall | bit2
+    EXPECT_EQ(f1, 0x5u); // cdecl | bit2
+    EXPECT_EQ(f2, 0x5u); // .calling_convention 顺序生效，对后续 extern 持续有效
+    // callx puts 站点 imm = 同值伪地址（无需链接器即可被加载期命中）
+    EXPECT_EQ(r.image[32], 0x61);
+    EXPECT_EQ(rd32(r.image, 32 + 1), 0x7E000000u);
+}
+
+// 显式地址 extern：静态宿主绑定，无 bit2；声明序不影响静态地址
+TEST(AssemblerV21Test, StaticExternNoDynamicBit) {
+    AssemblyResult r = assembleOk("extern puts 0x7F000001\n"
+                                  ".calling_convention cdecl\n"
+                                  "extern printf 0x7F000002\n");
+    auto [a0, f0] = importEntryAddrFlags(r.image, 0);
+    auto [a1, f1] = importEntryAddrFlags(r.image, 1);
+    EXPECT_EQ(a0, 0x7F000001u);
+    EXPECT_EQ(f0, 0x0u); // fastcall，无动态位
+    EXPECT_EQ(a1, 0x7F000002u);
+    EXPECT_EQ(f1, 0x1u); // cdecl，无动态位
 }
 
 // db 转义与字符串内注释符；dw/dd 小端；dd 标号引用统一编址回填

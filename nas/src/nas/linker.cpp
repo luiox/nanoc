@@ -31,8 +31,8 @@ namespace
 
     struct LinkImport {
         std::string name;
-        int32_t addr;  // 宿主地址；0 = 动态
-        int32_t flags; // bit0-1 = 调用约定
+        int32_t addr;  // 宿主地址：静态绑定 / 伪地址（动态导入）/ 0（旧格式动态）
+        int32_t flags; // bit0-1 = 调用约定，bit2 = 动态导入
     };
 
     struct LinkExport {
@@ -213,8 +213,8 @@ namespace
             LinkImport im;
             if (!readTableEntry(img, off, im.name, im.addr, im.flags, err))
                 return false;
-            if (im.flags & ~0x3) {
-                err = "导入符号 '" + im.name + "' flags 非法（bit0-1 之外必须为 0）";
+            if (im.flags & ~0x7) {
+                err = "导入符号 '" + im.name + "' flags 非法（bit0-2 之外必须为 0）";
                 return false;
             }
             m.imports.push_back(std::move(im));
@@ -327,8 +327,10 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
         }
     }
 
-    // ---- 导入内部解析判定：addr=0（动态）且名字命中导出 → resolved ----
-    // 同值多导入中存在可解析者 → callx/地址站点无法按值消歧 → 报错
+    // ---- 导入内部解析判定：addr=0（旧格式动态）或 flags bit2（伪地址动态导入）
+    // 且名字命中导出 → resolved（内部导出优先于加载期宿主解析）。
+    // 伪地址在模块内按声明序唯一 → callx/地址站点按 imm 值一对一映射到符号；
+    // 同值多导入中存在可解析者 → 无法按值消歧 → 报错（不静默错链）
     for (size_t i = 0; i < mods.size(); ++i) {
         ObjModule & m = mods[i];
         std::map<int32_t, int> countByAddr;
@@ -337,7 +339,8 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
         m.resolved.assign(m.imports.size(), false);
         for (size_t k = 0; k < m.imports.size(); ++k) {
             const LinkImport & im = m.imports[k];
-            if (im.addr != 0 || !exportAddr.count(im.name))
+            bool dynamic = (im.flags & IMPORT_FLAG_DYNAMIC) != 0;
+            if ((im.addr != 0 && !dynamic) || !exportAddr.count(im.name))
                 continue;
             if (countByAddr[im.addr] > 1) {
                 r.errorMessage = "模块 " + std::to_string(i) + ": 导入符号 '" + im.name
@@ -346,6 +349,31 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
                 return r;
             }
             m.resolved[k] = true;
+        }
+    }
+
+    // ---- 合并未解析导入：按名去重，flags 冲突报错 ----
+    // （提前到重定位之前：未内部解析的动态导入站点需按输出表首现伪地址改写）
+    std::vector<LinkImport> mergedImports;
+    std::map<std::string, size_t> importIndex;
+    for (size_t i = 0; i < mods.size(); ++i) {
+        const ObjModule & m = mods[i];
+        for (size_t k = 0; k < m.imports.size(); ++k) {
+            if (m.resolved[k])
+                continue; // 已内部解析，从输出导入表移除
+            const LinkImport & im = m.imports[k];
+            auto it = importIndex.find(im.name);
+            if (it != importIndex.end()) {
+                if (mergedImports[it->second].flags != im.flags) {
+                    r.errorMessage = "模块 " + std::to_string(i) + ": 导入符号 '"
+                                     + im.name
+                                     + "' 导入表 flags 冲突（调用约定/动态标记不一致）";
+                    return r;
+                }
+                continue; // 重名导入去重
+            }
+            importIndex[im.name] = mergedImports.size();
+            mergedImports.push_back(im);
         }
     }
 
@@ -376,7 +404,11 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
                 int32_t nv = v;
                 bool patched = false;
                 if (kind == AddrKind::CALLX || kind == AddrKind::DATA) {
-                    // 导入解析（仅 addr=0 动态导入，按值唯一命中）：改写为平移后目标
+                    // 导入解析（按值唯一命中）：
+                    //   已内部解析（addr=0 旧格式或 flags bit2 动态导入命中导出）
+                    //     → 改写为平移后内部目标地址；
+                    //   未内部解析的动态导入 → 改写为该符号在输出导入表中的首现
+                    //     伪地址（跨模块声明序差异归一，单模块为恒等变换）
                     int hits = 0;
                     size_t hit = 0;
                     for (size_t k = 0; k < m.imports.size(); ++k)
@@ -384,9 +416,15 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
                             hit = k;
                             ++hits;
                         }
-                    if (hits == 1 && m.resolved[hit]) {
-                        nv = exportAddr[m.imports[hit].name];
-                        patched = true;
+                    if (hits == 1) {
+                        if (m.resolved[hit]) {
+                            nv = exportAddr[m.imports[hit].name];
+                            patched = true;
+                        }
+                        else if (m.imports[hit].flags & IMPORT_FLAG_DYNAMIC) {
+                            nv = mergedImports[importIndex.at(m.imports[hit].name)].addr;
+                            patched = true;
+                        }
                     }
                 }
                 if (!patched && kind != AddrKind::CALLX) {
@@ -412,29 +450,6 @@ Linker::linkImages(const std::vector<std::vector<uint8_t>> & images)
     for (const auto & m : mods) {
         outCode.insert(outCode.end(), m.code.begin(), m.code.end());
         outData.insert(outData.end(), m.data.begin(), m.data.end());
-    }
-
-    // ---- 合并未解析导入：按名去重，flags 冲突报错 ----
-    std::vector<LinkImport> mergedImports;
-    std::map<std::string, size_t> importIndex;
-    for (size_t i = 0; i < mods.size(); ++i) {
-        const ObjModule & m = mods[i];
-        for (size_t k = 0; k < m.imports.size(); ++k) {
-            if (m.resolved[k])
-                continue; // 已内部解析，从输出导入表移除
-            const LinkImport & im = m.imports[k];
-            auto it = importIndex.find(im.name);
-            if (it != importIndex.end()) {
-                if (mergedImports[it->second].flags != im.flags) {
-                    r.errorMessage = "模块 " + std::to_string(i) + ": 导入符号 '"
-                                     + im.name + "' 调用约定冲突";
-                    return r;
-                }
-                continue; // 重名导入去重
-            }
-            importIndex[im.name] = mergedImports.size();
-            mergedImports.push_back(im);
-        }
     }
 
     // ---- entryPoint：main 导出优先，其次第一个导出符号，否则 0 ----

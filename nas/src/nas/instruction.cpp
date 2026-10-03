@@ -1271,7 +1271,8 @@ Assembler::parseLine(const std::string & line)
 // 导入表 entry（exportCount 同构，flags 恒 0）：
 //   int32 nameLen | uint8 name[nameLen] | uint8 0(NUL)
 //   | pad 至 4 字节对齐（以 entry 起始为基准）
-//   | int32 addr（宿主地址；0 = 留给动态链接）| int32 flags（bit0-1 = convention）
+//   | int32 addr（宿主地址：静态绑定 = 显式地址；动态导入 = 伪宿主地址）
+//   | int32 flags（bit0-1 = convention，bit2 = 动态导入，规范 §2.1）
 // ============================================================================
 
 namespace
@@ -1291,6 +1292,7 @@ namespace
         std::string name;
         int32_t address;
         uint8_t convention;
+        bool dynamic; // 无地址 extern：伪宿主地址 + flags bit2（加载期按名解析）
         int line;
     };
 
@@ -1359,6 +1361,7 @@ Assembler::assemble(const std::string & source)
     std::vector<uint8_t> dataBytes;
     int32_t codePc = 0;
     uint8_t curConvention = static_cast<uint8_t>(NCallingConvention::FASTCALL);
+    int32_t nextDynAddr = DYNAMIC_HOST_BASE; // 下一个无地址 extern 的伪宿主地址
 
     auto fail = [&result](int line, const std::string & msg) {
         result.errorLine = line;
@@ -1408,7 +1411,10 @@ Assembler::assemble(const std::string & source)
         std::string opLow = op;
         std::transform(opLow.begin(), opLow.end(), opLow.begin(), ::tolower);
 
-        // extern 名 [地址]：不占代码地址空间；缺省地址 = 0（留给动态链接）
+        // extern 名 [地址]：不占代码地址空间。缺省地址 = 动态导入：分配确定性伪宿主
+        // 地址（DYNAMIC_HOST_BASE 起按声明序 +4）写导入表 addr 与 callx 站点 imm
+        // （同值，站点↔符号一对一），flags 置 bit2，加载期经宿主库按符号名解析；
+        // 显式地址 = 静态宿主绑定（无动态位，加载期不解析）
         if (opLow == "extern") {
             size_t sp2 = rest.find_first_of(" \t");
             std::string name = (sp2 == std::string::npos) ? rest : rest.substr(0, sp2);
@@ -1434,11 +1440,26 @@ Assembler::assemble(const std::string & source)
                     break;
                 }
             if (existing) {
-                existing->address = addr;
                 existing->convention = curConvention;
+                if (addrStr.empty()) {
+                    if (!existing->dynamic) {
+                        existing->address = nextDynAddr;
+                        existing->dynamic = true;
+                        nextDynAddr += DYNAMIC_HOST_STEP;
+                    }
+                }
+                else {
+                    existing->address = addr;
+                    existing->dynamic = false;
+                }
+            }
+            else if (addrStr.empty()) {
+                imports.push_back(
+                  ImportRec{ name, nextDynAddr, curConvention, true, lineNo });
+                nextDynAddr += DYNAMIC_HOST_STEP;
             }
             else {
-                imports.push_back(ImportRec{ name, addr, curConvention, lineNo });
+                imports.push_back(ImportRec{ name, addr, curConvention, false, lineNo });
             }
             continue;
         }
@@ -1676,11 +1697,13 @@ Assembler::assemble(const std::string & source)
         img.insert(img.end(), ins->bytes.begin(), ins->bytes.end());
     img.insert(img.end(), dataBytes.begin(), dataBytes.end());
 
-    // 导入表：nameLen|name|NUL|pad|addr|flags
+    // 导入表：nameLen|name|NUL|pad|addr|flags（bit0-1 约定，bit2 动态导入）
     for (const auto & im : imports) {
         appendNameField(img, im.name);
         write32(img, im.address);
-        write32(img, static_cast<int32_t>(im.convention & 0x03));
+        write32(img,
+                static_cast<int32_t>(im.convention & 0x03)
+                  | (im.dynamic ? IMPORT_FLAG_DYNAMIC : 0));
     }
     // 导出表：与导入表同构，addr = 标号统一编址地址，flags 恒 0
     for (size_t i = 0; i < exports.size(); ++i) {
