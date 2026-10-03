@@ -94,6 +94,8 @@ public:
     virtual void emit() = 0;
 
 protected:
+    // 追加 opcode 字节（各指令类 emit 的公共前缀）
+    void emitOpcode();
     // 追加 4 字节立即数；若 pendingLabel 非空则写 0 占位并记录回填偏移
     void emitImm32(int32_t v);
 };
