@@ -268,6 +268,9 @@ private:
     void checkReturn(const ReturnStmt& stmt);
     void checkBreak(const BreakStmt& stmt);
     void checkContinue(const ContinueStmt& stmt);
+    // 追加区（PRD R10/R11；检查入口只在既有分发链尾部追加）
+    void checkDefer(const DeferStmt& stmt);         // defer 语句（body 须为表达式语句）
+    SemanticType checkMatch(const MatchExpr& expr); // match 表达式（R11）
 
     SemanticType checkExpr(const Expr& expr);
     SemanticType checkIdentifier(const IdentifierExpr& expr);
@@ -336,6 +339,8 @@ private:
 
     // ---- 工具 ----
     void reportError(int line, int column, const std::string& message);
+    // 警告级诊断（PRD R11：match 缺 `_` 未穷尽 → 警告而非错误；通配后分支不可达）
+    void reportWarning(int line, int column, const std::string& message);
     static std::string typeName(const SemanticType& type);
     static bool isScalar(const SemanticType& type); // int 或 char
     std::string m_fileName;
@@ -351,6 +356,9 @@ private:
     // 当前正在检查的函数（用于 return 检查）；nullptr 表示不在函数体内
     const FuncDeclaration* m_currentFunction;
     int m_loopDepth;
+    // defer 体嵌套深度（PRD R10 硬规格）：>0 时再出现 return/break/continue/
+    // defer 均为编译错误
+    int m_deferDepth = 0;
 };
 
 #endif // NCC_SEMANTIC_H

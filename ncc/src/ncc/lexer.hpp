@@ -24,6 +24,8 @@ enum class NTokenKind : int {
     KEYWORD_IMPORT,  // import：模块导入（PRD R2a 多文件整体编译）
     KEYWORD_EXPORT,  // export：顶层符号导出标记（PRD R2a）
     KEYWORD_EXTERN,  // extern：外部 C 函数声明（PRD R3）
+    KEYWORD_DEFER,   // defer：作用域退出时逆序执行（PRD R10；新增追加在表尾）
+    KEYWORD_MATCH,   // match：模式匹配表达式（PRD R11；新增追加在表尾）
 
     // Identifiers
     IDENTIFIER,
@@ -63,6 +65,11 @@ enum class NTokenKind : int {
     DELIMITER_RBRACE,    // }
     DELIMITER_LBRACKET,  // [
     DELIMITER_RBRACKET,  // ]
+
+    // Operators/Delimiters 追加区（PRD R10/R11；新记号只在表尾追加，
+    // 不改动既有枚举值——并行分支合并冲突最小化）
+    OPERATOR_FAT_ARROW, // =>（match 分支引导，PRD R11）
+    OPERATOR_DOTDOT,    // ..（match 区间模式，含端点，PRD R11）
 
     // Special tokens
     TOKEN_EOF,    // End of file

@@ -101,6 +101,14 @@ private:
     std::unique_ptr<Expr> parsePrimary();
     std::unique_ptr<Expr> parseCall(const std::string& callee);
 
+    // 追加区（PRD R10/R11；解析入口只在语句/表达式的既有分发链尾部追加）
+    // defer 语句：`defer <语句>;`（语义期限定为表达式语句）
+    std::unique_ptr<Stmt> parseDeferStatement();
+    // match 表达式：`match (subject) { patterns => body, ... }`（PRD R11）
+    std::unique_ptr<Expr> parseMatchExpression();
+    // match 单个模式：常量/区间/通配/守卫（PRD R11）
+    std::unique_ptr<MatchPattern> parseMatchPattern();
+
     // 错误处理：抛 ParseError（位置取当前 token）
     void error(const std::string& message);
     // 错误处理：抛 ParseError（位置取指定 token，用于 export 等前置上下文）

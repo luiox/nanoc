@@ -767,6 +767,9 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         // extern 声明仅限文件作用域（PRD R3）：语句位置一律报错
         error("extern declarations are only allowed at file scope");
         return nullptr;
+    case NTokenKind::KEYWORD_DEFER:
+        // defer 语句（PRD R10；追加在既有语句分发链之后）
+        return parseDeferStatement();
     default:
         return parseExprStatement();
     }
@@ -1177,6 +1180,10 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         return expr;
     }
 
+    case NTokenKind::KEYWORD_MATCH:
+        // match 表达式（PRD R11；追加在 primary 分发链之后）
+        return parseMatchExpression();
+
     default:
         error("Unexpected token: " + token.value);
         return nullptr;
@@ -1198,4 +1205,151 @@ std::unique_ptr<Expr> Parser::parseCall(const std::string& callee) {
     expect(NTokenKind::DELIMITER_RPAREN);
 
     return callExpr;
+}
+// ---------------------------------------------------------------------------
+// PRD R10/R11 语言特性（追加在文件尾；只新增函数，不改既有解析逻辑）
+// ---------------------------------------------------------------------------
+
+// defer 语句（PRD R10）：`defer <语句>;`。body 接受完整语句形态，但语义层
+// 只放行表达式语句（其余形态报错，诊断归语义层统一出）。
+std::unique_ptr<Stmt> Parser::parseDeferStatement() {
+    int line = currentToken().line;
+    int column = currentToken().column;
+
+    expect(NTokenKind::KEYWORD_DEFER);
+
+    auto deferStmt = std::make_unique<DeferStmt>(line, column);
+    deferStmt->body = parseStatement();
+    return deferStmt;
+}
+
+// match 表达式（PRD R11）：
+//   match (subject) { 0 => 1, 1..9 => 2, 10, 11 => 3, n if n < 0 => 4, _ => 0, }
+// - 模式列表以 ',' 分隔（多值），分支以 '=>' 引导，分支间 ',' 分隔且允许尾逗号
+// - 分支体：单表达式或块 `{ ... }`（块形态值为 0，供副作用分支使用）
+std::unique_ptr<Expr> Parser::parseMatchExpression() {
+    int line = currentToken().line;
+    int column = currentToken().column;
+
+    expect(NTokenKind::KEYWORD_MATCH);
+    expect(NTokenKind::DELIMITER_LPAREN);
+
+    auto matchExpr = std::make_unique<MatchExpr>(line, column);
+    matchExpr->subject = parseExpression();
+
+    expect(NTokenKind::DELIMITER_RPAREN);
+    expect(NTokenKind::DELIMITER_LBRACE);
+
+    if (currentToken().kind == NTokenKind::DELIMITER_RBRACE) {
+        error("match requires at least one arm");
+    }
+
+    while (currentToken().kind != NTokenKind::DELIMITER_RBRACE) {
+        auto arm = std::make_unique<MatchArm>();
+        arm->line = currentToken().line;
+        arm->column = currentToken().column;
+
+        // 模式列表：读到 '=>' 为止（多值以 ',' 分隔）
+        while (currentToken().kind != NTokenKind::OPERATOR_FAT_ARROW) {
+            arm->patterns.push_back(parseMatchPattern());
+            if (!match(NTokenKind::DELIMITER_COMMA)) {
+                break;
+            }
+        }
+        expect(NTokenKind::OPERATOR_FAT_ARROW);
+
+        // 分支体：块或单表达式
+        if (currentToken().kind == NTokenKind::DELIMITER_LBRACE) {
+            arm->blockBody = parseCompoundStatement();
+        } else {
+            arm->exprBody = parseExpression();
+        }
+
+        match(NTokenKind::DELIMITER_COMMA); // 分支间分隔符（允许尾逗号）
+        matchExpr->arms.push_back(std::move(arm));
+    }
+
+    expect(NTokenKind::DELIMITER_RBRACE);
+    return matchExpr;
+}
+
+// 单个模式（PRD R11）：
+// - 整型/字符常量（支持负号前缀）：`0`、`'a'`、`-1`
+// - 区间（含端点，决策记录：闭区间）：`1..9`、`'a'..'z'`、`-3..5`
+// - 通配：`_`
+// - 守卫绑定：`n if n < 0`（绑定名作用域 = 所在分支；裸绑定名不带 if 报错）
+std::unique_ptr<MatchPattern> Parser::parseMatchPattern() {
+    Token start = currentToken();
+
+    auto pattern = std::make_unique<MatchPattern>();
+    pattern->line = start.line;
+    pattern->column = start.column;
+
+    // 通配（'_' 经标识符通道词法化）
+    if (start.kind == NTokenKind::IDENTIFIER && start.value == "_") {
+        advance();
+        pattern->kind = MatchPattern::Kind::Wildcard;
+        return pattern;
+    }
+
+    bool negate = false;
+    if (start.kind == NTokenKind::OPERATOR_MINUS) {
+        negate = true;
+        advance();
+    }
+
+    if (currentToken().kind == NTokenKind::INTEGER_CONSTANT
+        || currentToken().kind == NTokenKind::CHAR_CONSTANT) {
+        // 字符常量 token 值为原始字符（按其码点作模式值）；整型常量按十进制
+        const bool isChar = currentToken().kind == NTokenKind::CHAR_CONSTANT;
+        const int magnitude = isChar ? static_cast<unsigned char>(currentToken().value[0])
+                                     : std::stoi(currentToken().value);
+        const int firstValue = negate ? -magnitude : magnitude;
+        advance();
+
+        // 区间：lo..hi（hi 侧同样允许负号）
+        if (currentToken().kind == NTokenKind::OPERATOR_DOTDOT) {
+            advance();
+            bool hiNegate = false;
+            if (currentToken().kind == NTokenKind::OPERATOR_MINUS) {
+                hiNegate = true;
+                advance();
+            }
+            if (currentToken().kind != NTokenKind::INTEGER_CONSTANT
+                && currentToken().kind != NTokenKind::CHAR_CONSTANT) {
+                error("expected upper bound after '..' in range pattern");
+            }
+            const int hiMagnitude =
+              currentToken().kind == NTokenKind::CHAR_CONSTANT
+                ? static_cast<unsigned char>(currentToken().value[0])
+                : std::stoi(currentToken().value);
+            pattern->kind = MatchPattern::Kind::Range;
+            pattern->isChar = isChar;
+            pattern->lo = firstValue;
+            pattern->hi = hiNegate ? -hiMagnitude : hiMagnitude;
+            advance();
+            return pattern;
+        }
+
+        pattern->kind = MatchPattern::Kind::Constant;
+        pattern->isChar = isChar;
+        pattern->lo = firstValue;
+        return pattern;
+    }
+
+    // 守卫绑定：`n if expr`（裸标识符不带 if 报错——PRD 模式清单不含裸绑定）
+    if (start.kind == NTokenKind::IDENTIFIER) {
+        advance();
+        if (currentToken().kind != NTokenKind::KEYWORD_IF) {
+            error("binding pattern requires a guard: use 'name if expr'");
+        }
+        advance(); // 消费 if
+        pattern->kind = MatchPattern::Kind::Guard;
+        pattern->binding = start.value;
+        pattern->guard = parseExpression();
+        return pattern;
+    }
+
+    error("invalid match pattern");
+    return nullptr;
 }
