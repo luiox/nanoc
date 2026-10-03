@@ -9,6 +9,12 @@ void VarDeclaration::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 // FuncDeclaration节点的accept实现
 void FuncDeclaration::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 
+// StructDeclaration节点的accept实现
+void StructDeclaration::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+
+// TypedefDeclaration节点的accept实现
+void TypedefDeclaration::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+
 // CompoundStmt节点的accept实现
 void CompoundStmt::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 
@@ -62,6 +68,12 @@ void NullLiteral::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 
 // IndexExpr节点的accept实现
 void IndexExpr::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+
+// MemberExpr节点的accept实现
+void MemberExpr::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+
+// InitListExpr节点的accept实现
+void InitListExpr::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 
 // StmtVarDeclaration节点的accept实现
 void StmtVarDeclaration::accept(ASTVisitor& visitor) { visitor.visit(*this); }

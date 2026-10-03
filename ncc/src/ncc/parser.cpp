@@ -64,58 +64,236 @@ std::unique_ptr<Program> Parser::parse() {
 }
 
 std::unique_ptr<Decl> Parser::parseDeclaration() {
-    // 检查是否是类型关键字
+    // typedef 只出现在文件作用域
+    if (currentToken().kind == NTokenKind::KEYWORD_TYPEDEF) {
+        return parseTypedefDeclaration();
+    }
+
+    // 类型开头：builtin 关键字或 struct
     if (currentToken().kind == NTokenKind::KEYWORD_INT
         || currentToken().kind == NTokenKind::KEYWORD_CHAR
-        || currentToken().kind == NTokenKind::KEYWORD_VOID) {
+        || currentToken().kind == NTokenKind::KEYWORD_VOID
+        || currentToken().kind == NTokenKind::KEYWORD_STRUCT) {
 
         // 保存当前位置
         size_t startPos = m_pos;
 
-        // 获取类型
-        std::string type = currentToken().value;
-        advance();
+        bool isStructTag = false;
+        parseTypePrefix(isStructTag, m_tokens[startPos].line, m_tokens[startPos].column);
 
-        // 指针层级：int* p / int* f()（多级由语义分析显式报不支持）
+        // struct Tag 后跟 { → 定义；跟 ; → 前向声明；否则回退按变量/函数声明解析
+        if (isStructTag) {
+            if (currentToken().kind == NTokenKind::DELIMITER_LBRACE) {
+                const Token& kw = m_tokens[startPos];
+                std::string tag = m_tokens[startPos + 1].value;
+                auto structDecl = parseStructBody(tag, kw.line, kw.column);
+                expect(NTokenKind::DELIMITER_SEMICOLON);
+                return structDecl;
+            }
+            if (currentToken().kind == NTokenKind::DELIMITER_SEMICOLON) {
+                const Token& kw = m_tokens[startPos];
+                auto structDecl =
+                  std::make_unique<StructDeclaration>(m_tokens[startPos + 1].value,
+                                                      kw.line,
+                                                      kw.column);
+                structDecl->isForward = true;
+                advance(); // 消费 ;
+                return structDecl;
+            }
+        }
+
+        // 名称探测（当前位置已在类型前缀之后）：判断函数声明还是变量声明
         while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
             advance();
         }
-
-        // 获取名称
         if (currentToken().kind != NTokenKind::IDENTIFIER) {
             error("Expected identifier after type");
         }
-        std::string name = currentToken().value;
         advance();
 
-        // 检查是函数声明还是变量声明
         if (currentToken().kind == NTokenKind::DELIMITER_LPAREN) {
             // 函数声明
             m_pos = startPos; // 回退
             return parseFuncDeclaration();
-        } else {
-            // 变量声明
-            m_pos = startPos; // 回退
-            return parseVarDeclaration();
         }
+        // 变量声明
+        m_pos = startPos; // 回退
+        return parseVarDeclaration();
     }
 
     error("Expected declaration");
     return nullptr;
 }
 
-std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
-    // 获取类型
-    if (currentToken().kind != NTokenKind::KEYWORD_INT
-        && currentToken().kind != NTokenKind::KEYWORD_CHAR
-        && currentToken().kind != NTokenKind::KEYWORD_VOID) {
-        error("Expected type keyword");
+// 类型前缀：builtin 关键字或 `struct Tag`；line/column 返回首个 token 位置
+std::string Parser::parseTypePrefix(bool& isStructTag, int& line, int& column) {
+    isStructTag = false;
+    line = currentToken().line;
+    column = currentToken().column;
+
+    if (currentToken().kind == NTokenKind::KEYWORD_STRUCT) {
+        advance();
+        isStructTag = true;
+        if (currentToken().kind != NTokenKind::IDENTIFIER) {
+            error("Expected struct tag after 'struct'");
+        }
+        std::string tag = currentToken().value;
+        advance();
+        return tag;
     }
 
-    std::string type = currentToken().value;
+    if (currentToken().kind == NTokenKind::KEYWORD_INT
+        || currentToken().kind == NTokenKind::KEYWORD_CHAR
+        || currentToken().kind == NTokenKind::KEYWORD_VOID) {
+        std::string type = currentToken().value;
+        advance();
+        return type;
+    }
+
+    error("Expected type keyword");
+    return "";
+}
+
+// struct 主体：`{ field; field; ... }`（不含结尾分号；tag 调用方已消费）
+std::unique_ptr<StructDeclaration> Parser::parseStructBody(const std::string& tag,
+                                                           int line,
+                                                           int column) {
+    auto structDecl = std::make_unique<StructDeclaration>(tag, line, column);
+    expect(NTokenKind::DELIMITER_LBRACE);
+
+    while (currentToken().kind != NTokenKind::DELIMITER_RBRACE
+           && currentToken().kind != NTokenKind::TOKEN_EOF) {
+        if (currentToken().kind == NTokenKind::KEYWORD_TYPEDEF) {
+            error("typedef is not allowed inside a struct");
+        }
+        bool fieldIsStruct = false;
+        int fieldLine = 0;
+        int fieldColumn = 0;
+        std::string fieldType = parseTypePrefix(fieldIsStruct, fieldLine, fieldColumn);
+
+        int pointerDepth = 0;
+        while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
+            ++pointerDepth;
+            advance();
+        }
+
+        if (currentToken().kind != NTokenKind::IDENTIFIER) {
+            error("Expected member name");
+        }
+        std::string fieldName = currentToken().value;
+        advance();
+
+        auto field =
+          std::make_unique<VarDeclaration>(fieldType, fieldName, fieldLine, fieldColumn);
+        field->isStructTag = fieldIsStruct;
+        field->pointerDepth = pointerDepth;
+
+        // 数组成员：int arr[4];
+        if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+            field->isArray = true;
+            field->arrayDims = 1;
+            advance();
+            if (currentToken().kind != NTokenKind::INTEGER_CONSTANT) {
+                error("Expected integer constant array size");
+            }
+            field->arraySize = std::stoi(currentToken().value);
+            advance();
+            expect(NTokenKind::DELIMITER_RBRACKET);
+            while (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+                ++field->arrayDims;
+                advance();
+                if (currentToken().kind != NTokenKind::INTEGER_CONSTANT) {
+                    error("Expected integer constant array size");
+                }
+                advance();
+                expect(NTokenKind::DELIMITER_RBRACKET);
+            }
+        }
+
+        if (currentToken().kind == NTokenKind::OPERATOR_ASSIGN) {
+            error("struct field initializers are not supported");
+        }
+
+        expect(NTokenKind::DELIMITER_SEMICOLON);
+        structDecl->fields.push_back(std::move(field));
+    }
+
+    expect(NTokenKind::DELIMITER_RBRACE);
+    return structDecl;
+}
+
+// typedef：typedef int T; / typedef struct Point T; / typedef struct { .. } T;
+//          typedef struct Point { .. } T; / typedef int* P;
+std::unique_ptr<Decl> Parser::parseTypedefDeclaration() {
     int line = currentToken().line;
     int column = currentToken().column;
+    advance(); // 消费 typedef
+
+    auto decl = std::make_unique<TypedefDeclaration>("", line, column);
+
+    if (currentToken().kind == NTokenKind::KEYWORD_STRUCT) {
+        int structLine = currentToken().line;
+        int structColumn = currentToken().column;
+        decl->baseIsStruct = true;
+        advance(); // 消费 struct
+
+        if (currentToken().kind == NTokenKind::DELIMITER_LBRACE) {
+            // 匿名定义：内部标签由解析器生成
+            std::string anonTag = "__anon_" + std::to_string(m_anonCounter++);
+            decl->structDef = parseStructBody(anonTag, structLine, structColumn);
+            decl->baseType = anonTag;
+        } else if (currentToken().kind == NTokenKind::IDENTIFIER) {
+            decl->baseType = currentToken().value;
+            advance();
+            if (currentToken().kind == NTokenKind::DELIMITER_LBRACE) {
+                // typedef struct Tag { ... } Alias;：定义与别名一体
+                decl->structDef =
+                  parseStructBody(decl->baseType, structLine, structColumn);
+            }
+        } else {
+            error("Expected struct tag after 'struct'");
+        }
+    } else if (currentToken().kind == NTokenKind::KEYWORD_INT
+               || currentToken().kind == NTokenKind::KEYWORD_CHAR
+               || currentToken().kind == NTokenKind::KEYWORD_VOID) {
+        decl->baseType = currentToken().value;
+        advance();
+    } else {
+        error("Expected type after 'typedef'");
+    }
+
+    while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
+        ++decl->pointerDepth;
+        advance();
+    }
+
+    if (currentToken().kind != NTokenKind::IDENTIFIER) {
+        error("Expected typedef name");
+    }
+    decl->alias = currentToken().value;
     advance();
+
+    if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+        error("array typedefs are not supported");
+    }
+
+    expect(NTokenKind::DELIMITER_SEMICOLON);
+    return decl;
+}
+
+std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
+    // 获取类型（builtin 或 struct Tag）
+    bool isStructTag = false;
+    int line = 0;
+    int column = 0;
+    std::string type = parseTypePrefix(isStructTag, line, column);
+
+    // struct 定义/前向声明不允许出现在变量声明位置
+    if (isStructTag
+        && (currentToken().kind == NTokenKind::DELIMITER_LBRACE
+            || currentToken().kind == NTokenKind::DELIMITER_SEMICOLON)) {
+        error("struct definition is only allowed at file scope");
+    }
 
     // 指针层级
     int pointerDepth = 0;
@@ -133,6 +311,7 @@ std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
     advance();
 
     auto varDecl = std::make_unique<VarDeclaration>(type, name, line, column);
+    varDecl->isStructTag = isStructTag;
     varDecl->pointerDepth = pointerDepth;
 
     // 数组后缀：int a[10]；多维在此一并解析（arrayDims≥2 由语义分析报不支持）
@@ -157,10 +336,10 @@ std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
         }
     }
 
-    // 检查是否有初始化
+    // 检查是否有初始化（{ ... } → 逐成员初始化器）
     if (currentToken().kind == NTokenKind::OPERATOR_ASSIGN) {
         advance();
-        varDecl->initializer = parseExpression();
+        varDecl->initializer = parseInitializer();
     }
 
     // 期望分号
@@ -169,18 +348,37 @@ std::unique_ptr<VarDeclaration> Parser::parseVarDeclaration() {
     return varDecl;
 }
 
-std::unique_ptr<Stmt> Parser::parseVarDeclarationStmt() {
-    // 获取类型
-    if (currentToken().kind != NTokenKind::KEYWORD_INT
-        && currentToken().kind != NTokenKind::KEYWORD_CHAR
-        && currentToken().kind != NTokenKind::KEYWORD_VOID) {
-        error("Expected type keyword");
+// 声明初始化：`{ e1, e2 }` → InitListExpr，否则普通表达式
+std::unique_ptr<Expr> Parser::parseInitializer() {
+    if (currentToken().kind != NTokenKind::DELIMITER_LBRACE) {
+        return parseExpression();
     }
-
-    std::string type = currentToken().value;
     int line = currentToken().line;
     int column = currentToken().column;
     advance();
+    auto init = std::make_unique<InitListExpr>(line, column);
+    if (currentToken().kind != NTokenKind::DELIMITER_RBRACE) {
+        do {
+            init->values.push_back(parseExpression());
+        } while (match(NTokenKind::DELIMITER_COMMA));
+    }
+    expect(NTokenKind::DELIMITER_RBRACE);
+    return init;
+}
+
+std::unique_ptr<Stmt> Parser::parseVarDeclarationStmt() {
+    // 获取类型（builtin 或 struct Tag）
+    bool isStructTag = false;
+    int line = 0;
+    int column = 0;
+    std::string type = parseTypePrefix(isStructTag, line, column);
+
+    // 函数体内不允许 struct 定义/前向声明（局部 struct 变量引用全局标签合法）
+    if (isStructTag
+        && (currentToken().kind == NTokenKind::DELIMITER_LBRACE
+            || currentToken().kind == NTokenKind::DELIMITER_SEMICOLON)) {
+        error("struct definition is only allowed at file scope");
+    }
 
     // 指针层级
     int pointerDepth = 0;
@@ -198,6 +396,7 @@ std::unique_ptr<Stmt> Parser::parseVarDeclarationStmt() {
     advance();
 
     auto varDecl = std::make_unique<StmtVarDeclaration>(type, name, line, column);
+    varDecl->isStructTag = isStructTag;
     varDecl->pointerDepth = pointerDepth;
 
     // 数组后缀：与 parseVarDeclaration 相同的多维解析策略
@@ -222,10 +421,10 @@ std::unique_ptr<Stmt> Parser::parseVarDeclarationStmt() {
         }
     }
 
-    // 检查是否有初始化
+    // 检查是否有初始化（{ ... } → 逐成员初始化器）
     if (currentToken().kind == NTokenKind::OPERATOR_ASSIGN) {
         advance();
-        varDecl->initializer = parseExpression();
+        varDecl->initializer = parseInitializer();
     }
 
     // 期望分号
@@ -235,17 +434,11 @@ std::unique_ptr<Stmt> Parser::parseVarDeclarationStmt() {
 }
 
 std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
-    // 获取返回类型
-    if (currentToken().kind != NTokenKind::KEYWORD_INT
-        && currentToken().kind != NTokenKind::KEYWORD_CHAR
-        && currentToken().kind != NTokenKind::KEYWORD_VOID) {
-        error("Expected return type");
-    }
-
-    std::string returnType = currentToken().value;
-    int line = currentToken().line;
-    int column = currentToken().column;
-    advance();
+    // 获取返回类型（builtin 或 struct Tag）
+    bool returnIsStruct = false;
+    int line = 0;
+    int column = 0;
+    std::string returnType = parseTypePrefix(returnIsStruct, line, column);
 
     // 返回类型指针层级：int* f()
     int returnPointerDepth = 0;
@@ -263,6 +456,7 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     advance();
 
     auto funcDecl = std::make_unique<FuncDeclaration>(returnType, name, line, column);
+    funcDecl->returnIsStruct = returnIsStruct;
     funcDecl->returnPointerDepth = returnPointerDepth;
 
     // 解析参数列表
@@ -270,15 +464,14 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
 
     if (currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
         do {
-            // 解析参数
-            if (currentToken().kind != NTokenKind::KEYWORD_INT
-                && currentToken().kind != NTokenKind::KEYWORD_CHAR
-                && currentToken().kind != NTokenKind::KEYWORD_VOID) {
-                error("Expected parameter type");
-            }
-
-            std::string paramType = currentToken().value;
-            advance();
+            // 解析参数（builtin 或 struct Tag）
+            bool paramIsStruct = false;
+            int paramLine = 0;
+            int paramColumn = 0;
+            std::string paramType =
+              parseTypePrefix(paramIsStruct, paramLine, paramColumn);
+            (void)paramLine;
+            (void)paramColumn;
 
             // 参数指针层级：int f(int* a, char* s)
             int paramPointerDepth = 0;
@@ -300,8 +493,10 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
                       "pointer");
             }
 
+            // 参数沿用既有约定记录函数声明位置（诊断落点与既有负例一致）
             auto param =
               std::make_unique<VarDeclaration>(paramType, paramName, line, column);
+            param->isStructTag = paramIsStruct;
             param->pointerDepth = paramPointerDepth;
             funcDecl->parameters.push_back(std::move(param));
 
@@ -337,6 +532,13 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     case NTokenKind::KEYWORD_VOID:
         // 变量声明作为语句处理
         return parseVarDeclarationStmt();
+    case NTokenKind::KEYWORD_STRUCT:
+        // 局部 struct 变量声明（引用全局标签）合法；定义/前向声明在
+        // parseVarDeclarationStmt 中报错
+        return parseVarDeclarationStmt();
+    case NTokenKind::KEYWORD_TYPEDEF:
+        error("typedef declarations are only allowed at file scope");
+        return nullptr;
     default:
         return parseExprStatement();
     }
@@ -490,9 +692,11 @@ std::unique_ptr<Expr> Parser::parseAssignment() {
     auto expr = parseLogicalOr();
 
     if (currentToken().kind == NTokenKind::OPERATOR_ASSIGN) {
-        // 左值形式：标识符（x = v）、下标（a[i] = v）、解引用（*p = v）
+        // 左值形式：标识符（x = v）、下标（a[i] = v）、解引用（*p = v）、
+        // 成员访问（p.x = v / p->x = v）
         const bool validTarget = expr->type == ASTNodeType::IDENTIFIER_EXPR
                                  || expr->type == ASTNodeType::INDEX_EXPR
+                                 || expr->type == ASTNodeType::MEMBER_EXPR
                                  || (expr->type == ASTNodeType::UNARY_EXPR
                                      && static_cast<const UnaryExpr&>(*expr).op == "*");
         if (!validTarget) {
@@ -657,17 +861,38 @@ std::unique_ptr<Expr> Parser::parseUnary() {
 std::unique_ptr<Expr> Parser::parsePostfix() {
     auto expr = parsePrimary();
 
-    // 后缀下标：a[i]、p[i]、a[i][j]（多维下标由语义分析报不支持）
-    while (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
-        int line = currentToken().line;
-        int column = currentToken().column;
-        advance();
+    // 后缀下标与成员访问：a[i]、p[i]、p.x、p->x（多维下标由语义分析报不支持）
+    while (true) {
+        if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+            int line = currentToken().line;
+            int column = currentToken().column;
+            advance();
 
-        auto indexExpr = std::make_unique<IndexExpr>(std::move(expr), line, column);
-        indexExpr->index = parseExpression();
-        expect(NTokenKind::DELIMITER_RBRACKET);
+            auto indexExpr = std::make_unique<IndexExpr>(std::move(expr), line, column);
+            indexExpr->index = parseExpression();
+            expect(NTokenKind::DELIMITER_RBRACKET);
 
-        expr = std::move(indexExpr);
+            expr = std::move(indexExpr);
+            continue;
+        }
+        if (currentToken().kind == NTokenKind::OPERATOR_DOT
+            || currentToken().kind == NTokenKind::OPERATOR_ARROW) {
+            const bool arrow = currentToken().kind == NTokenKind::OPERATOR_ARROW;
+            const int line = currentToken().line;
+            const int column = currentToken().column;
+            advance();
+
+            if (currentToken().kind != NTokenKind::IDENTIFIER) {
+                error(arrow ? "Expected member name after '->'"
+                            : "Expected member name after '.'");
+            }
+            std::string member = currentToken().value;
+            advance();
+
+            expr = std::make_unique<MemberExpr>(std::move(expr), member, arrow, line, column);
+            continue;
+        }
+        break;
     }
 
     return expr;

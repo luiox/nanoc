@@ -19,6 +19,8 @@ void Lexer::initKeywords() {
     m_keywords["break"] = NTokenKind::KEYWORD_BREAK;
     m_keywords["continue"] = NTokenKind::KEYWORD_CONTINUE;
     m_keywords["NULL"] = NTokenKind::KEYWORD_NULL;
+    m_keywords["struct"] = NTokenKind::KEYWORD_STRUCT;
+    m_keywords["typedef"] = NTokenKind::KEYWORD_TYPEDEF;
 }
 
 char Lexer::currentChar() const {
@@ -167,6 +169,10 @@ Token Lexer::readOperator() {
     case '+':
         return Token(NTokenKind::OPERATOR_PLUS, "+", startLine, startColumn);
     case '-':
+        if (currentChar() == '>') {
+            advance();
+            return Token(NTokenKind::OPERATOR_ARROW, "->", startLine, startColumn);
+        }
         return Token(NTokenKind::OPERATOR_MINUS, "-", startLine, startColumn);
     case '*':
         return Token(NTokenKind::OPERATOR_MULTIPLY, "*", startLine, startColumn);
@@ -213,6 +219,8 @@ Token Lexer::readOperator() {
             return Token(NTokenKind::OPERATOR_LOGICAL_OR, "||", startLine, startColumn);
         }
         throw std::runtime_error("Expected '|' at line " + std::to_string(m_line));
+    case '.':
+        return Token(NTokenKind::OPERATOR_DOT, ".", startLine, startColumn);
     default:
         throw std::runtime_error("Unknown operator at line " + std::to_string(m_line));
     }
@@ -284,7 +292,7 @@ Token Lexer::nextToken() {
 
     // 运算符
     if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=' || c == '!'
-        || c == '<' || c == '>' || c == '&' || c == '|') {
+        || c == '<' || c == '>' || c == '&' || c == '|' || c == '.') {
         return readOperator();
     }
 

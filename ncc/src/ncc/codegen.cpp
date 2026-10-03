@@ -4,28 +4,31 @@
 
 namespace {
 
-    // 规范类型名：int/char + 指针星号 + 数组方括号（供 exprType 与符号表使用）
-    std::string canonicalType(const std::string& base, int pointerDepth, bool isArray) {
-        if (isArray) {
-            return base + "[]";
-        }
-        if (pointerDepth >= 1) {
-            return base + "*";
-        }
-        return base;
+    // 规范类型名后缀工具：基型（int/char/void/struct Tag）+ 指针星号 + 数组方括号
+    bool endsWith(const std::string& s, const std::string& suffix) {
+        return s.size() >= suffix.size()
+               && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
     }
 
-    bool isPointerTypeName(const std::string& t) { return t == "int*" || t == "char*"; }
+    std::string stripSuffix(const std::string& s, const std::string& suffix) {
+        if (endsWith(s, suffix)) {
+            return s.substr(0, s.size() - suffix.size());
+        }
+        return s;
+    }
 
-    bool isArrayTypeName(const std::string& t) { return t == "int[]" || t == "char[]"; }
+    bool isPointerTypeName(const std::string& t) { return endsWith(t, "*"); }
+
+    bool isArrayTypeName(const std::string& t) { return endsWith(t, "[]"); }
+
+    std::string pointerPointee(const std::string& t) { return stripSuffix(t, "*"); }
+
+    std::string arrayElement(const std::string& t) { return stripSuffix(t, "[]"); }
 
     // 数组名在值上下文退化为指针
     std::string decayedTypeName(const std::string& t) {
-        if (t == "int[]") {
-            return "int*";
-        }
-        if (t == "char[]") {
-            return "char*";
+        if (isArrayTypeName(t)) {
+            return arrayElement(t) + "*";
         }
         return t;
     }
@@ -51,6 +54,12 @@ std::string CodeGenerator::generate(Program& program) {
     m_breakLabels.clear();
     m_continueLabels.clear();
     m_nextSlot = 0;
+    m_structs.clear();
+    m_typedefs.clear();
+    m_structReturnTag.clear();
+    m_sretSaveSlot = 0;
+    m_tempCursor = 0;
+    m_tempLimit = 0;
     m_sink = &m_code;
 
     program.accept(*this);
@@ -88,6 +97,117 @@ const CodeGenerator::Symbol* CodeGenerator::findSymbol(const std::string& name) 
     return nullptr;
 }
 
+// ---- 类型解析（typedef/struct 透明展开） ----
+
+// 声明里的基础类型名 → 规范基型："int"/"char"/"void"/"struct Tag"
+std::string CodeGenerator::resolveBaseType(const std::string& name,
+                                           bool isStructTag) const {
+    if (isStructTag) {
+        return "struct " + name;
+    }
+    if (name == "int" || name == "char" || name == "void") {
+        return name;
+    }
+    auto it = m_typedefs.find(name);
+    if (it != m_typedefs.end()) {
+        return it->second; // 别名透明展开（可能已含指针后缀）
+    }
+    return name; // 未知类型：语义分析已报错，此处原样保留
+}
+
+std::string CodeGenerator::canonicalType(const std::string& base,
+                                         int pointerDepth,
+                                         bool isArray) const {
+    if (isArray) {
+        return base + "[]";
+    }
+    if (pointerDepth >= 1) {
+        return base + "*";
+    }
+    return base;
+}
+
+// "struct T"（值形态）→ 布局表条目；其余返回 nullptr
+const CodeGenerator::StructLayout*
+CodeGenerator::structLayoutOf(const std::string& type) const {
+    if (type.rfind("struct ", 0) != 0 || isPointerTypeName(type)
+        || isArrayTypeName(type)) {
+        return nullptr;
+    }
+    auto it = m_structs.find(type.substr(7));
+    return it != m_structs.end() ? &it->second : nullptr;
+}
+
+const CodeGenerator::StructLayout*
+CodeGenerator::findFieldLayout(const std::string& type) const {
+    return structLayoutOf(type);
+}
+
+const CodeGenerator::FieldLayout*
+CodeGenerator::findField(const StructLayout& layout, const std::string& name) const {
+    for (const auto& field : layout.fields) {
+        if (field.name == name) {
+            return &field;
+        }
+    }
+    return nullptr;
+}
+
+// struct 定义 → 布局表（与 semantic 同一规则：按声明顺序累加、4 字节对齐无填充）
+void CodeGenerator::registerStructLayout(const StructDeclaration& node) {
+    if (node.isForward) {
+        if (m_structs.find(node.tag) == m_structs.end()) {
+            m_structs[node.tag] = StructLayout{};
+        }
+        return;
+    }
+    auto existing = m_structs.find(node.tag);
+    if (existing != m_structs.end() && existing->second.complete) {
+        return; // 重复定义：语义分析已报错
+    }
+
+    StructLayout layout;
+    int offsetWords = 0;
+    for (const auto& field : node.fields) {
+        const std::string base = resolveBaseType(field->type, field->isStructTag);
+        const std::string fieldType =
+          canonicalType(base, field->pointerDepth, field->isArray);
+        int sizeWords = 1;
+        if (field->isArray) {
+            const std::string element = arrayElement(fieldType);
+            sizeWords = std::max(field->arraySize, 1) * typeSizeWords(element);
+        } else {
+            sizeWords = typeSizeWords(fieldType);
+        }
+        FieldLayout entry;
+        entry.name = field->name;
+        entry.offsetWords = offsetWords;
+        entry.sizeWords = std::max(sizeWords, 1);
+        entry.type = fieldType;
+        offsetWords += entry.sizeWords;
+        layout.fields.push_back(std::move(entry));
+    }
+    layout.sizeWords = offsetWords;
+    layout.complete = !layout.fields.empty();
+    m_structs[node.tag] = std::move(layout);
+}
+
+// 类型字数：标量/指针 1，struct 值按布局；数组/未知类型由调用方另行处理
+int CodeGenerator::typeSizeWords(const std::string& type) const {
+    if (const StructLayout* layout = structLayoutOf(type)) {
+        return std::max(layout->sizeWords, 1);
+    }
+    if (isPointerTypeName(type) || isArrayTypeName(type)) {
+        return 1;
+    }
+    if (type == "int" || type == "char" || type == "void") {
+        return 1;
+    }
+    return 1; // 未知类型占位（语义分析已报错）
+}
+
+// ---- 全局变量 ----
+
 void CodeGenerator::registerGlobal(VarDeclaration& node) {
     if (!m_registeredGlobals.insert(&node).second) {
         return; // 同一声明只登记一次
@@ -98,15 +218,42 @@ void CodeGenerator::registerGlobal(VarDeclaration& node) {
     Symbol symbol;
     symbol.kind = SymKind::Global;
     symbol.label = ".g_" + node.name;
-    symbol.type = canonicalType(node.type, node.pointerDepth, node.isArray);
+    symbol.type =
+      canonicalType(resolveBaseType(node.type, node.isStructTag),
+                    node.pointerDepth,
+                    node.isArray);
     symbol.isArray = node.isArray;
     symbol.arraySize = node.arraySize;
     m_globalSymbols[node.name] = symbol;
 
+    if (!node.initializer) {
+        return;
+    }
+    if (node.initializer->type == ASTNodeType::INIT_LIST_EXPR) {
+        // struct 逐成员初始化器：每个标量/指针成员一条全局初始化
+        auto& initList = static_cast<InitListExpr&>(*node.initializer);
+        const StructLayout* layout = structLayoutOf(symbol.type);
+        if (layout == nullptr) {
+            throw std::runtime_error("array initializers are not supported");
+        }
+        for (size_t i = 0; i < initList.values.size() && i < layout->fields.size();
+             ++i) {
+            if (initList.values[i]->type == ASTNodeType::INIT_LIST_EXPR) {
+                throw std::runtime_error("nested initializers are not supported");
+            }
+            GlobalInit init;
+            init.label = symbol.label;
+            init.offsetWords = layout->fields[i].offsetWords;
+            init.expr = initList.values[i].get();
+            m_globalInits.push_back(init);
+        }
+        return;
+    }
     // 数组整体初始化被语义拒绝；此处防御式跳过
-    if (node.initializer && !node.isArray) {
+    if (!node.isArray) {
         GlobalInit init;
         init.label = symbol.label;
+        init.offsetWords = 0;
         init.expr = node.initializer.get();
         m_globalInits.push_back(init);
     }
@@ -117,9 +264,14 @@ void CodeGenerator::emitGlobalInits() {
         init.expr->accept(*this); // 求值结果压栈
         emit("    pop R0");
         emit("    lea R6, " + init.label);
+        if (init.offsetWords > 0) {
+            emit("    addi R6, " + std::to_string(4 * init.offsetWords));
+        }
         emit("    store [R6], R0");
     }
 }
+
+// ---- 变量读写 ----
 
 void CodeGenerator::emitLoadVar(const Symbol& sym) {
     switch (sym.kind) {
@@ -156,6 +308,17 @@ void CodeGenerator::emitStoreVar(const Symbol& sym) {
     }
     emit("    store [R6], R0");
 }
+
+// struct 对象地址 → R0：形参槽位存副本地址（load 即得），局部/全局取槽地址
+void CodeGenerator::emitStructAddressOfSymbol(const Symbol& sym) {
+    if (sym.isStructParam) {
+        emitLoadVar(sym);
+        return;
+    }
+    emitAddressOfSymbol(sym);
+}
+
+// ---- 条件分支 ----
 
 void CodeGenerator::emitTestBranch(const std::string& target, bool branchOnTrue) {
     // TEST R, R：按位 AND 置 flags（0 → Z，负 → N，正 → P）
@@ -279,6 +442,8 @@ void CodeGenerator::emitBranch(Expr& expr, const std::string& target, bool branc
     emitTestBranch(target, branchOnTrue);
 }
 
+// ---- 函数帧统计 ----
+
 int CodeGenerator::countLocalSlots(Stmt* stmt) const {
     if (!stmt) {
         return 0;
@@ -294,7 +459,18 @@ int CodeGenerator::countLocalSlots(Stmt* stmt) const {
     }
     case ASTNodeType::VAR_DECLARATION: { // 语句上下文的声明节点（StmtVarDeclaration）
         auto& varDecl = static_cast<StmtVarDeclaration&>(*stmt);
-        return varDecl.isArray ? std::max(varDecl.arraySize, 1) : 1;
+        // struct 值按布局字数占槽；数组按元素数 × 元素字数
+        const std::string type = canonicalType(
+          resolveBaseType(varDecl.type, varDecl.isStructTag),
+          varDecl.pointerDepth,
+          varDecl.isArray);
+        int words = typeSizeWords(type);
+        if (varDecl.isArray) {
+            // 数组元素类型 = 去掉 "[]" 后缀（struct 元素按布局字数）
+            const std::string element = arrayElement(type);
+            words = std::max(varDecl.arraySize, 1) * typeSizeWords(element);
+        }
+        return std::max(words, 1);
     }
     case ASTNodeType::IF_STMT: {
         auto& ifStmt = static_cast<IfStmt&>(*stmt);
@@ -312,14 +488,187 @@ int CodeGenerator::countLocalSlots(Stmt* stmt) const {
     }
 }
 
+// ---- struct 临时空间统计 ----
+
+// 表达式子树需要的 struct 临时词数：struct 返回调用的接收槽 +
+// struct 值实参的副本槽
+int CodeGenerator::structTempWords(const Expr* expr) {
+    if (!expr) {
+        return 0;
+    }
+    switch (expr->type) {
+    case ASTNodeType::CALL_EXPR: {
+        auto& call = static_cast<const CallExpr&>(*expr);
+        int words = 0;
+        auto it = m_functionReturns.find(call.callee);
+        const std::string returnType =
+          it != m_functionReturns.end() ? it->second : "int";
+        if (const StructLayout* layout = structLayoutOf(returnType)) {
+            words += std::max(layout->sizeWords, 1);
+        }
+        for (const auto& argument : call.arguments) {
+            words += structTempWords(argument.get());
+            const std::string argumentType = exprType(*argument);
+            if (const StructLayout* argumentLayout = structLayoutOf(argumentType)) {
+                words += std::max(argumentLayout->sizeWords, 1);
+            }
+        }
+        return words;
+    }
+    case ASTNodeType::BINARY_EXPR: {
+        auto& binary = static_cast<const BinaryExpr&>(*expr);
+        return structTempWords(binary.left.get()) + structTempWords(binary.right.get());
+    }
+    case ASTNodeType::UNARY_EXPR:
+        return structTempWords(static_cast<const UnaryExpr&>(*expr).operand.get());
+    case ASTNodeType::ASSIGN_EXPR: {
+        auto& assign = static_cast<const AssignExpr&>(*expr);
+        return structTempWords(assign.target.get()) + structTempWords(assign.value.get());
+    }
+    case ASTNodeType::INDEX_EXPR: {
+        auto& index = static_cast<const IndexExpr&>(*expr);
+        return structTempWords(index.base.get()) + structTempWords(index.index.get());
+    }
+    case ASTNodeType::MEMBER_EXPR:
+        return structTempWords(static_cast<const MemberExpr&>(*expr).base.get());
+    case ASTNodeType::INIT_LIST_EXPR: {
+        int words = 0;
+        for (const auto& value : static_cast<const InitListExpr&>(*expr).values) {
+            words += structTempWords(value.get());
+        }
+        return words;
+    }
+    default:
+        return 0;
+    }
+}
+
+// 语句树：登记局部变量类型（exprType 计数依赖符号类型，须先于函数体生成），
+// 并累计 struct 临时词数
+int CodeGenerator::countStructTemps(const Stmt* stmt) {
+    if (!stmt) {
+        return 0;
+    }
+    switch (stmt->type) {
+    case ASTNodeType::COMPOUND_STMT: {
+        int words = 0;
+        for (const auto& child : static_cast<const CompoundStmt&>(*stmt).statements) {
+            words += countStructTemps(child.get());
+        }
+        return words;
+    }
+    case ASTNodeType::VAR_DECLARATION: {
+        const auto& varDecl = static_cast<const StmtVarDeclaration&>(*stmt);
+        // 登记局部变量类型（槽位在函数体生成时正式分配，此处类型即所需）
+        Symbol symbol;
+        symbol.kind = SymKind::Local;
+        symbol.type = canonicalType(resolveBaseType(varDecl.type, varDecl.isStructTag),
+                                    varDecl.pointerDepth,
+                                    varDecl.isArray);
+        symbol.isArray = varDecl.isArray;
+        symbol.arraySize = varDecl.arraySize;
+        m_localSymbols[varDecl.name] = symbol;
+        return varDecl.initializer ? structTempWords(varDecl.initializer.get()) : 0;
+    }
+    case ASTNodeType::IF_STMT: {
+        auto& ifStmt = static_cast<const IfStmt&>(*stmt);
+        return structTempWords(ifStmt.condition.get()) + countStructTemps(ifStmt.thenBranch.get())
+               + countStructTemps(ifStmt.elseBranch.get());
+    }
+    case ASTNodeType::WHILE_STMT: {
+        auto& whileStmt = static_cast<const WhileStmt&>(*stmt);
+        return structTempWords(whileStmt.condition.get())
+               + countStructTemps(whileStmt.body.get());
+    }
+    case ASTNodeType::FOR_STMT: {
+        auto& forStmt = static_cast<const ForStmt&>(*stmt);
+        return countStructTemps(forStmt.init.get())
+               + structTempWords(forStmt.condition.get())
+               + structTempWords(forStmt.increment.get())
+               + countStructTemps(forStmt.body.get());
+    }
+    case ASTNodeType::RETURN_STMT:
+        return structTempWords(static_cast<const ReturnStmt&>(*stmt).value.get());
+    case ASTNodeType::EXPR_STMT:
+        return structTempWords(static_cast<const ExprStmt&>(*stmt).expression.get());
+    default:
+        return 0;
+    }
+}
+
+// ---- struct 临时槽与拷贝 ----
+
+int CodeGenerator::allocStructTemp() {
+    if (m_tempCursor >= m_tempLimit) {
+        throw std::runtime_error(
+          "internal error: struct temporary slots exhausted");
+    }
+    return ++m_tempCursor;
+}
+
+// R1=源地址、R2=目的地址 → 逐字拷贝 sizeWords 字
+void CodeGenerator::emitCopyWords(int sizeWords) {
+    for (int i = 0; i < sizeWords; ++i) {
+        emit("    mov R6, R1");
+        if (i > 0) {
+            emit("    addi R6, " + std::to_string(4 * i));
+        }
+        emit("    load R0, [R6]");
+        emit("    mov R6, R2");
+        if (i > 0) {
+            emit("    addi R6, " + std::to_string(4 * i));
+        }
+        emit("    store [R6], R0");
+    }
+}
+
+// 栈顶=源地址、R0=目的地址 → 逐字拷贝，push 目的地址（struct 赋值表达式的值）
+void CodeGenerator::emitPopCopyPush(int sizeWords) {
+    emit("    pop R1");     // 源地址（struct 值 = 地址）
+    emit("    mov R2, R0"); // 目的地址
+    emitCopyWords(sizeWords);
+    emit("    mov R0, R2");
+    emit("    push R0");
+}
+
+// 栈顶=源 struct 地址 → 拷贝到新临时槽，push 临时槽地址（struct 实参按值传递）
+void CodeGenerator::emitStructArgCopy(const std::string& structType) {
+    const StructLayout* layout = structLayoutOf(structType);
+    const int sizeWords = layout != nullptr ? std::max(layout->sizeWords, 1) : 1;
+    const int slot = allocStructTemp();
+    emit("    mov R0, R5");
+    emit("    subi R0, " + std::to_string(4 * slot)); // 目的地址
+    emitPopCopyPush(sizeWords);
+}
+
+// ---- 访问者：程序与声明 ----
+
 void CodeGenerator::visit(Program& node) {
-    // 第一遍：登记函数符号（允许前向引用）与全局变量
+    // 第一遍之一：struct 布局与 typedef 别名表（与 semantic 同序、同规则）
+    for (auto& decl : node.declarations) {
+        if (decl->type == ASTNodeType::STRUCT_DECLARATION) {
+            registerStructLayout(static_cast<StructDeclaration&>(*decl));
+        } else if (decl->type == ASTNodeType::TYPEDEF_DECLARATION) {
+            auto& typedefDecl = static_cast<TypedefDeclaration&>(*decl);
+            if (typedefDecl.structDef) {
+                registerStructLayout(*typedefDecl.structDef);
+            }
+            const std::string base =
+              resolveBaseType(typedefDecl.baseType, typedefDecl.baseIsStruct);
+            m_typedefs[typedefDecl.alias] =
+              canonicalType(base, typedefDecl.pointerDepth, false);
+        }
+    }
+
+    // 第一遍之二：登记函数符号（允许前向引用）与全局变量
     for (auto& decl : node.declarations) {
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
             auto& func = static_cast<FuncDeclaration&>(*decl);
             m_functions.insert(func.name);
-            m_functionReturns[func.name] =
-              canonicalType(func.returnType, func.returnPointerDepth, false);
+            m_functionReturns[func.name] = canonicalType(
+              resolveBaseType(func.returnType, func.returnIsStruct),
+              func.returnPointerDepth,
+              false);
         } else if (decl->type == ASTNodeType::VAR_DECLARATION) {
             registerGlobal(static_cast<VarDeclaration&>(*decl));
         }
@@ -354,11 +703,15 @@ void CodeGenerator::visit(Program& node) {
         m_sink = &m_data;
         emit("");
         emit("; Data segment");
-        // 全局变量：标量 1 个字；数组按元素数排布（每元素 1 字）
+        // 全局变量：标量/指针 1 个字；数组按元素数；struct 按布局字数
         for (const auto& name : m_globalOrder) {
             const Symbol& symbol = m_globalSymbols.at(name);
             emitLabel(symbol.label);
-            const int words = symbol.isArray ? std::max(symbol.arraySize, 1) : 1;
+            const std::string elementType =
+              symbol.isArray ? arrayElement(symbol.type) : symbol.type;
+            const int wordsPerElement = typeSizeWords(elementType);
+            const int count = symbol.isArray ? std::max(symbol.arraySize, 1) : 1;
+            const int words = wordsPerElement * count;
             for (int i = 0; i < words; ++i) {
                 emit("    dd 0");
             }
@@ -377,40 +730,85 @@ void CodeGenerator::visit(VarDeclaration& node) {
     registerGlobal(node);
 }
 
+void CodeGenerator::visit(StructDeclaration& node) {
+    // 已由 visit(Program) 预登记布局（此处兜底）
+    registerStructLayout(node);
+}
+
+void CodeGenerator::visit(TypedefDeclaration& node) {
+    // 已由 visit(Program) 预登记别名（此处兜底）
+    if (node.structDef) {
+        registerStructLayout(*node.structDef);
+    }
+    const std::string base = resolveBaseType(node.baseType, node.baseIsStruct);
+    m_typedefs[node.alias] = canonicalType(base, node.pointerDepth, false);
+}
+
 void CodeGenerator::visit(FuncDeclaration& node) {
     m_functions.insert(node.name);
     m_localSymbols.clear();
     m_nextSlot = 0;
     const bool isMain = (node.name == "main");
 
+    const std::string returnType =
+      m_functionReturns.count(node.name) > 0 ? m_functionReturns.at(node.name)
+                                             : canonicalType(
+                                                 resolveBaseType(node.returnType,
+                                                                 node.returnIsStruct),
+                                                 node.returnPointerDepth,
+                                                 false);
+    const StructLayout* returnLayout = structLayoutOf(returnType);
+    const bool returnsStruct = returnLayout != nullptr;
+    m_structReturnTag = returnsStruct ? returnType : std::string();
+
     emit("");
     emit("; Function: " + node.name);
     emitLabel(node.name);
 
-    // fastcall：前 4 个参数占帧槽位（入口溢出保存），第 5 个起在调用者栈上
+    // fastcall：前 4 个参数占帧槽位（入口溢出保存），第 5 个起在调用者栈上。
+    // struct 形参按地址传递：槽位存调用者副本地址（type 记为 struct T*）
     const int regParams = static_cast<int>(std::min<size_t>(node.parameters.size(), 4));
     for (int i = 0; i < regParams; ++i) {
         Symbol symbol;
         symbol.kind = SymKind::Local;
         symbol.slot = i + 1;
-        // 形参不能是数组（解析器拒绝）；指针形参按值传递地址
-        symbol.type = canonicalType(node.parameters[i]->type,
-                                    node.parameters[i]->pointerDepth,
-                                    false);
+        symbol.type = canonicalType(
+          resolveBaseType(node.parameters[i]->type, node.parameters[i]->isStructTag),
+          node.parameters[i]->pointerDepth,
+          false);
+        if (structLayoutOf(symbol.type) != nullptr) {
+            symbol.type += "*";
+            symbol.isStructParam = true;
+        }
         m_localSymbols[node.parameters[i]->name] = symbol;
     }
     for (size_t i = 4; i < node.parameters.size(); ++i) {
         Symbol symbol;
         symbol.kind = SymKind::StackArg;
         symbol.argIndex = static_cast<int>(i) + 1;
-        symbol.type = canonicalType(node.parameters[i]->type,
-                                    node.parameters[i]->pointerDepth,
-                                    false);
+        symbol.type = canonicalType(
+          resolveBaseType(node.parameters[i]->type, node.parameters[i]->isStructTag),
+          node.parameters[i]->pointerDepth,
+          false);
+        if (structLayoutOf(symbol.type) != nullptr) {
+            symbol.type += "*";
+            symbol.isStructParam = true;
+        }
         m_localSymbols[node.parameters[i]->name] = symbol;
     }
     m_nextSlot = regParams;
 
-    const int enterSize = 4 * (m_nextSlot + countLocalSlots(node.body.get()));
+    // 帧布局：形参槽 + 局部槽 + struct 临时区（+ struct 返回的 R7 保存槽）
+    const int localSlots = countLocalSlots(node.body.get());
+    const int tempWords = countStructTemps(node.body.get());
+    const int sretWords = returnsStruct ? 1 : 0;
+    m_tempLimit = m_nextSlot + localSlots + tempWords + sretWords;
+    m_tempCursor = m_nextSlot + localSlots;
+    if (returnsStruct) {
+        m_sretSaveSlot = allocStructTemp(); // 临时区首个槽固定存调用者的 R7
+    }
+
+    const int enterSize = 4 * m_tempLimit;
     emit("    enter " + std::to_string(enterSize));
 
     // 溢出寄存器参数到帧槽位
@@ -418,6 +816,13 @@ void CodeGenerator::visit(FuncDeclaration& node) {
         emit("    mov R6, R5");
         emit("    subi R6, " + std::to_string(4 * (i + 1)));
         emit("    store [R6], R" + std::to_string(i));
+    }
+
+    // struct 返回：保存调用者传入的 R7（接收槽地址），防嵌套 struct 调用覆盖
+    if (returnsStruct) {
+        emit("    mov R6, R5");
+        emit("    subi R6, " + std::to_string(4 * m_sretSaveSlot));
+        emit("    store [R6], R7");
     }
 
     // main：先执行全局变量初始化（此时寄存器参数已溢出，可自由使用 R0/R6）
@@ -432,7 +837,10 @@ void CodeGenerator::visit(FuncDeclaration& node) {
     emit("    leave");
     emit("    ret");
     m_localSymbols.clear();
+    m_structReturnTag.clear();
 }
+
+// ---- 语句 ----
 
 void CodeGenerator::visit(CompoundStmt& node) {
     for (auto& stmt : node.statements) {
@@ -512,6 +920,15 @@ void CodeGenerator::visit(ReturnStmt& node) {
     if (node.value) {
         node.value->accept(*this);
         emit("    pop R0"); // 返回值统一在 R0
+        if (!m_structReturnTag.empty()) {
+            // sret：把返回的 struct（源地址在 R0）逐字拷到调用者接收槽 [保存的 R7]
+            emit("    mov R1, R0"); // 源地址
+            emit("    mov R6, R5");
+            emit("    subi R6, " + std::to_string(4 * m_sretSaveSlot));
+            emit("    load R2, [R6]"); // 目的地址 = 调用者接收槽
+            emitCopyWords(typeSizeWords(m_structReturnTag));
+            emit("    mov R0, R2"); // 约定 R0 = sret 接收槽地址
+        }
     }
     emit("    leave");
     emit("    ret");
@@ -537,6 +954,8 @@ void CodeGenerator::visit(ExprStmt& node) {
         emit("    pop R0"); // 表达式语句的结果被丢弃
     }
 }
+
+// ---- 表达式 ----
 
 void CodeGenerator::visit(BinaryExpr& node) {
     if (node.op == "&&") {
@@ -582,15 +1001,15 @@ void CodeGenerator::visit(BinaryExpr& node) {
     emit("    pop R0"); // 左操作数
 
     if (node.op == "+") {
-        // 指针 ± 整数按指向类型大小缩放（当前全部标量 4 字节）
+        // 指针 ± 整数按指向类型大小缩放（标量/指针 4 字节，struct 按布局）
         const std::string lt = decayedTypeName(exprType(*node.left));
         const std::string rt = decayedTypeName(exprType(*node.right));
         if (isPointerTypeName(lt)) {
-            emit("    lmm R2, 4");
+            emit("    lmm R2, " + std::to_string(4 * typeSizeWords(pointerPointee(lt))));
             emit("    mul R1, R2");
             emit("    add R0, R1");
         } else if (isPointerTypeName(rt)) {
-            emit("    lmm R2, 4");
+            emit("    lmm R2, " + std::to_string(4 * typeSizeWords(pointerPointee(rt))));
             emit("    mul R0, R2");
             emit("    add R0, R1");
         } else {
@@ -599,7 +1018,7 @@ void CodeGenerator::visit(BinaryExpr& node) {
     } else if (node.op == "-") {
         const std::string lt = decayedTypeName(exprType(*node.left));
         if (isPointerTypeName(lt)) {
-            emit("    lmm R2, 4");
+            emit("    lmm R2, " + std::to_string(4 * typeSizeWords(pointerPointee(lt))));
             emit("    mul R1, R2");
         }
         emit("    sub R0, R1");
@@ -623,10 +1042,14 @@ void CodeGenerator::visit(UnaryExpr& node) {
         return;
     }
     if (node.op == "*") {
-        // 解引用：操作数求值得地址（数组名退化为首元素地址），LOAD 取内容
+        // 解引用：操作数求值得地址；struct 指针解引用地址即 struct 值，不 LOAD
         node.operand->accept(*this);
         emit("    pop R0");
-        emit("    load R0, [R0]");
+        const std::string operandType = decayedTypeName(exprType(*node.operand));
+        if (isPointerTypeName(operandType)
+            && structLayoutOf(pointerPointee(operandType)) == nullptr) {
+            emit("    load R0, [R0]");
+        }
         emit("    push R0");
         return;
     }
@@ -655,7 +1078,7 @@ void CodeGenerator::visit(UnaryExpr& node) {
 }
 
 void CodeGenerator::visit(AssignExpr& node) {
-    node.value->accept(*this); // 值求值后压栈
+    node.value->accept(*this); // 值/源 struct 地址压栈
 
     switch (node.target->type) {
     case ASTNodeType::IDENTIFIER_EXPR: {
@@ -668,14 +1091,42 @@ void CodeGenerator::visit(AssignExpr& node) {
             // 数组整体赋值已被语义拒绝；防御式报错
             throw std::runtime_error("Cannot assign to array: " + ident.name);
         }
+        if (structLayoutOf(symbol->type) != nullptr) {
+            // struct 整体赋值：逐字拷贝（栈顶=源地址）
+            emitStructAddressOfSymbol(*symbol); // 目的地址 → R0
+            emitPopCopyPush(typeSizeWords(symbol->type));
+            return; // 已 push 赋值结果（目的地址）
+        }
         emit("    pop R0");
         emitStoreVar(*symbol);
         break;
     }
+    case ASTNodeType::MEMBER_EXPR: {
+        const FieldLayout* field = nullptr;
+        emitMemberAddress(static_cast<MemberExpr&>(*node.target), &field);
+        if (field != nullptr && structLayoutOf(field->type) != nullptr) {
+            // struct 成员整体赋值：逐字拷贝
+            emitPopCopyPush(field->sizeWords);
+            return;
+        }
+        if (field != nullptr && isArrayTypeName(field->type)) {
+            throw std::runtime_error("Cannot assign to array member: " + field->name);
+        }
+        emit("    mov R6, R0");
+        emit("    pop R0");
+        emit("    store [R6], R0");
+        break;
+    }
     case ASTNodeType::INDEX_EXPR:
     case ASTNodeType::UNARY_EXPR: {
-        // a[i] = v / *p = v：目标地址 → R0 → R6，弹出值存入
+        // a[i] = v / *p = v：目标地址 → R0，弹出值存入；
+        // struct 元素/解引用整体赋值 → 逐字拷贝
         emitAddressOf(*node.target);
+        const std::string targetType = exprType(*node.target);
+        if (const StructLayout* layout = structLayoutOf(targetType)) {
+            emitPopCopyPush(std::max(layout->sizeWords, 1));
+            return;
+        }
         emit("    mov R6, R0");
         emit("    pop R0");
         emit("    store [R6], R0");
@@ -695,9 +1146,19 @@ void CodeGenerator::visit(CallExpr& node) {
         m_externs.push_back(node.callee);
     }
 
-    // 参数从右向左求值：a1 最后求值留在栈顶，a5..aN 依序压在栈上
+    auto returnIt = m_functionReturns.find(node.callee);
+    const std::string returnType =
+      returnIt != m_functionReturns.end() ? returnIt->second : "int";
+    const StructLayout* returnLayout = structLayoutOf(returnType);
+
+    // 参数从右向左求值：a1 最后求值留在栈顶，a5..aN 依序压在栈上；
+    // struct 值实参逐字拷贝到调用者临时槽，副本地址作为实参（按值语义）
     for (int i = static_cast<int>(node.arguments.size()) - 1; i >= 0; --i) {
-        node.arguments[i]->accept(*this);
+        Expr& argument = *node.arguments[i];
+        argument.accept(*this);
+        if (structLayoutOf(exprType(argument)) != nullptr) {
+            emitStructArgCopy(exprType(argument));
+        }
     }
 
     // 前 4 个参数弹入 R0-R3（fastcall）
@@ -712,6 +1173,14 @@ void CodeGenerator::visit(CallExpr& node) {
         emit("    pop R3");
     }
 
+    // struct 返回（sret）：接收槽地址经 R7 传入
+    int sretSlot = 0;
+    if (returnLayout != nullptr) {
+        sretSlot = allocStructTemp();
+        emit("    mov R7, R5");
+        emit("    subi R7, " + std::to_string(4 * sretSlot));
+    }
+
     if (external) {
         emit("    callx " + node.callee);
     } else {
@@ -723,7 +1192,11 @@ void CodeGenerator::visit(CallExpr& node) {
         emit("    addi R4, " + std::to_string(4 * (node.arguments.size() - 4)));
     }
 
-    // 返回值在 R0，压栈
+    // 返回值压栈：struct → 接收槽地址；标量/指针 → R0
+    if (returnLayout != nullptr) {
+        emit("    mov R0, R5");
+        emit("    subi R0, " + std::to_string(4 * sretSlot));
+    }
     emit("    push R0");
 }
 
@@ -735,6 +1208,9 @@ void CodeGenerator::visit(IdentifierExpr& node) {
     if (isArrayTypeName(symbol->type)) {
         // 数组名退化为首元素地址（传参/赋给指针/比较/条件）
         emitAddressOfSymbol(*symbol);
+    } else if (structLayoutOf(symbol->type) != nullptr) {
+        // struct 值：地址即值（形参槽位存地址 → load；局部/全局 → 槽地址）
+        emitStructAddressOfSymbol(*symbol);
     } else {
         emitLoadVar(*symbol);
     }
@@ -765,30 +1241,87 @@ void CodeGenerator::visit(NullLiteral& node) {
 }
 
 void CodeGenerator::visit(IndexExpr& node) {
-    // a[i] / p[i]：元素地址 → LOAD
+    // a[i] / p[i]：元素地址 → LOAD；struct 元素地址即 struct 值，不 LOAD
     emitElementAddress(node);
-    emit("    load R0, [R0]");
+    const std::string baseType = decayedTypeName(exprType(*node.base));
+    const std::string element = isArrayTypeName(baseType) ? arrayElement(baseType)
+                                                          : pointerPointee(baseType);
+    if (structLayoutOf(element) == nullptr) {
+        emit("    load R0, [R0]");
+    }
     emit("    push R0");
+}
+
+void CodeGenerator::visit(MemberExpr& node) {
+    const FieldLayout* field = nullptr;
+    emitMemberAddress(node, &field);
+    // 成员为标量/指针 → LOAD 取值；struct/array 成员地址即值（数组名退化）
+    const bool loadNeeded = field == nullptr
+                            || (structLayoutOf(field->type) == nullptr
+                                && !isArrayTypeName(field->type));
+    if (loadNeeded) {
+        emit("    load R0, [R0]");
+    }
+    emit("    push R0");
+}
+
+void CodeGenerator::visit(InitListExpr& node) {
+    // 初始化器列表只允许作为 struct 声明的初始化器（声明处展开），
+    // 出现在一般表达式位置属于内部错误
+    (void)node;
+    throw std::runtime_error("initializer list is not a first-class expression");
 }
 
 void CodeGenerator::visit(StmtVarDeclaration& node) {
     Symbol symbol;
     symbol.kind = SymKind::Local;
     symbol.slot = ++m_nextSlot;
-    symbol.type = canonicalType(node.type, node.pointerDepth, node.isArray);
+    symbol.type = canonicalType(resolveBaseType(node.type, node.isStructTag),
+                                node.pointerDepth,
+                                node.isArray);
     symbol.isArray = node.isArray;
     symbol.arraySize = node.arraySize;
     m_localSymbols[node.name] = symbol;
 
+    // 槽位占用：struct 按布局字数；数组按元素数 × 元素字数
+    int words = typeSizeWords(symbol.type);
     if (node.isArray) {
-        // 数组占 arraySize 个连续槽位（首元素在最低地址槽，向高地址延伸）
-        m_nextSlot += std::max(node.arraySize, 1) - 1;
+        words = std::max(node.arraySize, 1) * typeSizeWords(arrayElement(symbol.type));
     }
+    m_nextSlot += std::max(words, 1) - 1;
 
     if (node.initializer) {
-        node.initializer->accept(*this);
-        emit("    pop R0");
-        emitStoreVar(symbol);
+        if (node.initializer->type == ASTNodeType::INIT_LIST_EXPR) {
+            // struct 逐成员初始化：成员表达式求值后存入 基址+成员偏移
+            auto& initList = static_cast<InitListExpr&>(*node.initializer);
+            const StructLayout* layout = structLayoutOf(symbol.type);
+            if (layout == nullptr) {
+                throw std::runtime_error("array initializers are not supported");
+            }
+            for (size_t i = 0;
+                 i < initList.values.size() && i < layout->fields.size();
+                 ++i) {
+                initList.values[i]->accept(*this);
+                emitStructAddressOfSymbol(symbol); // 基址 → R0
+                const FieldLayout& field = layout->fields[i];
+                if (field.offsetWords > 0) {
+                    emit("    addi R0, " + std::to_string(4 * field.offsetWords));
+                }
+                emit("    mov R6, R0");
+                emit("    pop R0");
+                emit("    store [R6], R0");
+            }
+        } else if (structLayoutOf(symbol.type) != nullptr) {
+            // struct 整体初始化：源地址压栈 → 拷贝到变量槽
+            node.initializer->accept(*this);
+            emitStructAddressOfSymbol(symbol); // 目的地址 → R0
+            emitPopCopyPush(typeSizeWords(symbol.type));
+            emit("    pop R0"); // 丢弃赋值表达式的结果
+        } else {
+            node.initializer->accept(*this);
+            emit("    pop R0");
+            emitStoreVar(symbol);
+        }
     }
 }
 
@@ -801,8 +1334,14 @@ void CodeGenerator::visit(StmtVarDeclaration& node) {
 void CodeGenerator::emitAddressOfSymbol(const Symbol& sym) {
     switch (sym.kind) {
     case SymKind::Local: {
-        const int slotOffset =
-          sym.slot + (sym.isArray ? std::max(sym.arraySize, 1) - 1 : 0);
+        const int elementWords = sym.isArray
+                                   ? typeSizeWords(arrayElement(sym.type))
+                                   : 1;
+        const int blockWords =
+          sym.isArray
+            ? std::max(sym.arraySize, 1) * elementWords
+            : typeSizeWords(sym.type); // struct 值占多槽；标量/指针 1 槽
+        const int slotOffset = sym.slot + std::max(blockWords, 1) - 1;
         emit("    mov R0, R5");
         emit("    subi R0, " + std::to_string(4 * slotOffset));
         break;
@@ -817,7 +1356,7 @@ void CodeGenerator::emitAddressOfSymbol(const Symbol& sym) {
     }
 }
 
-// 左值表达式地址 → R0：x / a[i] / *p
+// 左值表达式地址 → R0：x / a[i] / *p / p.x
 void CodeGenerator::emitAddressOf(Expr& expr) {
     switch (expr.type) {
     case ASTNodeType::IDENTIFIER_EXPR: {
@@ -826,11 +1365,19 @@ void CodeGenerator::emitAddressOf(Expr& expr) {
         if (!symbol) {
             throw std::runtime_error("Undefined variable: " + ident.name);
         }
-        emitAddressOfSymbol(*symbol);
+        if (symbol->isStructParam) {
+            // struct 形参：槽位存副本地址（load 即对象地址）
+            emitLoadVar(*symbol);
+        } else {
+            emitAddressOfSymbol(*symbol);
+        }
         break;
     }
     case ASTNodeType::INDEX_EXPR:
         emitElementAddress(static_cast<IndexExpr&>(expr));
+        break;
+    case ASTNodeType::MEMBER_EXPR:
+        emitMemberAddress(static_cast<MemberExpr&>(expr), nullptr);
         break;
     case ASTNodeType::UNARY_EXPR:
         if (static_cast<UnaryExpr&>(expr).op == "*") {
@@ -845,9 +1392,72 @@ void CodeGenerator::emitAddressOf(Expr& expr) {
     }
 }
 
+// struct 对象地址 → R0：标识符（局部/全局/形参）、成员、下标、解引用、
+// struct 返回调用的临时槽
+void CodeGenerator::emitStructValueAddress(Expr& expr) {
+    switch (expr.type) {
+    case ASTNodeType::IDENTIFIER_EXPR: {
+        auto& ident = static_cast<IdentifierExpr&>(expr);
+        const Symbol* symbol = findSymbol(ident.name);
+        if (!symbol) {
+            throw std::runtime_error("Undefined variable: " + ident.name);
+        }
+        emitStructAddressOfSymbol(*symbol);
+        break;
+    }
+    case ASTNodeType::MEMBER_EXPR:
+        emitMemberAddress(static_cast<MemberExpr&>(expr), nullptr);
+        break;
+    case ASTNodeType::INDEX_EXPR:
+        emitElementAddress(static_cast<IndexExpr&>(expr));
+        break;
+    case ASTNodeType::UNARY_EXPR:
+        if (static_cast<UnaryExpr&>(expr).op == "*") {
+            static_cast<UnaryExpr&>(expr).operand->accept(*this);
+            emit("    pop R0");
+            break;
+        }
+        throw std::runtime_error("cannot obtain address of struct value");
+    case ASTNodeType::CALL_EXPR:
+        expr.accept(*this); // struct 返回：求值结果 = 接收槽地址
+        emit("    pop R0");
+        break;
+    default:
+        throw std::runtime_error("cannot obtain address of struct value");
+    }
+}
+
+// 成员地址 → R0：基址（dot：struct 值地址；arrow/struct 形参：指针值）+ 偏移
+void CodeGenerator::emitMemberAddress(MemberExpr& node, const FieldLayout** outField) {
+    const std::string baseType = exprType(*node.base);
+    const bool throughPointer = isPointerTypeName(baseType);
+    const std::string valueType = throughPointer ? pointerPointee(baseType) : baseType;
+    const StructLayout* layout = structLayoutOf(valueType);
+    if (layout == nullptr) {
+        throw std::runtime_error("member access on non-struct type: " + baseType);
+    }
+    const FieldLayout* field = findField(*layout, node.member);
+    if (field == nullptr) {
+        throw std::runtime_error("no member named '" + node.member + "' in " + valueType);
+    }
+    if (outField != nullptr) {
+        *outField = field;
+    }
+
+    if (throughPointer) {
+        node.base->accept(*this);
+        emit("    pop R0"); // 指针值即 struct 地址
+    } else {
+        emitStructValueAddress(*node.base);
+    }
+    if (field->offsetWords > 0) {
+        emit("    addi R0, " + std::to_string(4 * field->offsetWords));
+    }
+}
+
 // a[i] / p[i] 元素地址 → R0
 // 先求下标压栈暂存，再取基址（下标求值会使用 R0 作暂存，不能先算基址）；
-// 元素地址 = 基址 + 4*i（数组首元素与指针运算同一语义：a[k] == *(a+k)）
+// 元素地址 = 基址 + 元素字数×4×i（数组首元素与指针运算同一语义：a[k] == *(a+k)）
 void CodeGenerator::emitElementAddress(IndexExpr& node) {
     // 下标 → 栈
     node.index->accept(*this);
@@ -867,9 +1477,12 @@ void CodeGenerator::emitElementAddress(IndexExpr& node) {
         emit("    pop R0");
     }
 
-    // 变址：R1 = index * 4（当前全部元素 4 字节），正向偏移
+    // 变址：R1 = index × 元素字节数（标量/指针元素 4 字节，struct 元素按布局）
+    const std::string baseType = decayedTypeName(exprType(*node.base));
+    const std::string element =
+      isArrayTypeName(baseType) ? arrayElement(baseType) : pointerPointee(baseType);
     emit("    pop R1");
-    emit("    lmm R2, 4");
+    emit("    lmm R2, " + std::to_string(4 * typeSizeWords(element)));
     emit("    mul R1, R2");
     emit("    add R0, R1");
 }
@@ -903,34 +1516,33 @@ std::string CodeGenerator::exprType(const Expr& expr) const {
     case ASTNodeType::UNARY_EXPR: {
         const auto& unary = static_cast<const UnaryExpr&>(expr);
         if (unary.op == "&") {
-            const std::string t = exprType(*unary.operand);
-            if (t == "int") {
-                return "int*";
-            }
-            if (t == "char") {
-                return "char*";
-            }
-            return "<error>";
+            return exprType(*unary.operand) + "*"; // T → T*（struct/标量均适用）
         }
         if (unary.op == "*") {
             const std::string t = decayedTypeName(exprType(*unary.operand));
-            if (t == "int*") {
-                return "int";
-            }
-            if (t == "char*") {
-                return "char";
+            if (isPointerTypeName(t)) {
+                return pointerPointee(t);
             }
             return "<error>";
         }
         return "int"; // - !
     }
     case ASTNodeType::INDEX_EXPR: {
-        const std::string t = exprType(*static_cast<const IndexExpr&>(expr).base);
-        if (t == "int[]" || t == "int*") {
-            return "int";
+        const std::string t = decayedTypeName(exprType(*static_cast<const IndexExpr&>(expr).base));
+        if (isPointerTypeName(t)) {
+            return pointerPointee(t);
         }
-        if (t == "char[]") {
-            return "char";
+        return "<error>";
+    }
+    case ASTNodeType::MEMBER_EXPR: {
+        const auto& member = static_cast<const MemberExpr&>(expr);
+        const std::string baseType = exprType(*member.base);
+        const std::string valueType =
+          isPointerTypeName(baseType) ? pointerPointee(baseType) : baseType;
+        if (const StructLayout* layout = structLayoutOf(valueType)) {
+            if (const FieldLayout* field = findField(*layout, member.member)) {
+                return field->type;
+            }
         }
         return "<error>";
     }

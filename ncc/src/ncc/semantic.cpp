@@ -1,14 +1,56 @@
 #include "ncc/semantic.hpp"
 
 #include <algorithm>
+#include <set>
 #include <sstream>
 #include <utility>
 
 // 条件上下文可用的类型：标量/指针/NULL（非零为真）
-static bool isConditionType(SemanticType type) {
-    return type == SemanticType::Int || type == SemanticType::Char
-           || type == SemanticType::IntPtr || type == SemanticType::CharPtr
-           || type == SemanticType::Null;
+static bool isConditionType(const SemanticType& type) {
+    return type.kind == SemanticType::Kind::Int
+           || type.kind == SemanticType::Kind::Char
+           || type.kind == SemanticType::Kind::Pointer
+           || type.kind == SemanticType::Kind::Null;
+}
+
+// ---------------------------------------------------------------------------
+// 语义类型（R1.2 第二批：递归值类型）
+// ---------------------------------------------------------------------------
+
+bool SemanticType::operator==(const SemanticType& other) const {
+    if (kind != other.kind || tag != other.tag) {
+        return false;
+    }
+    if (element == nullptr || other.element == nullptr) {
+        return element == other.element;
+    }
+    return *element == *other.element;
+}
+
+const SemanticType SemanticType::Int{Kind::Int, "", nullptr};
+const SemanticType SemanticType::Char{Kind::Char, "", nullptr};
+const SemanticType SemanticType::Void{Kind::Void, "", nullptr};
+const SemanticType SemanticType::Error{Kind::Error, "", nullptr};
+const SemanticType SemanticType::Null{Kind::Null, "", nullptr};
+const SemanticType SemanticType::IntPtr = pointerTo(Int);
+const SemanticType SemanticType::CharPtr = pointerTo(Char);
+const SemanticType SemanticType::IntArray = arrayOf(Int);
+const SemanticType SemanticType::CharArray = arrayOf(Char);
+
+SemanticType SemanticType::structOf(std::string structTag) {
+    return SemanticType{Kind::Struct, std::move(structTag), nullptr};
+}
+
+SemanticType SemanticType::pointerTo(SemanticType pointee) {
+    return SemanticType{Kind::Pointer,
+                        "",
+                        std::make_shared<const SemanticType>(std::move(pointee))};
+}
+
+SemanticType SemanticType::arrayOf(SemanticType elem) {
+    return SemanticType{Kind::Array,
+                        "",
+                        std::make_shared<const SemanticType>(std::move(elem))};
 }
 
 // ---------------------------------------------------------------------------
@@ -59,11 +101,24 @@ SemanticAnalyzer::analyze(const Program& program) {
 
     m_result = SemanticResult{};
     m_scopes.clear();
+    m_structs.clear();
+    m_typedefs.clear();
     m_scopes.emplace_back(); // 作用域 0：全局
     m_currentFunction = nullptr;
     m_loopDepth = 0;
 
-    // 第一遍：登记全部顶层函数签名，使调用点可以前向引用（先调用后定义/相互递归）
+    // 第一遍之一：struct 定义/前向声明与 typedef 按声明顺序登记。类型命名空间
+    // 全编译单元内可见（不强制文本先序，决策见 semantic.hpp 类注释）
+    for (const auto& decl : program.declarations) {
+        if (decl->type == ASTNodeType::STRUCT_DECLARATION) {
+            registerStructDeclaration(static_cast<const StructDeclaration&>(*decl));
+        } else if (decl->type == ASTNodeType::TYPEDEF_DECLARATION) {
+            registerTypedefDeclaration(static_cast<const TypedefDeclaration&>(*decl));
+        }
+    }
+
+    // 第一遍之二：登记全部顶层函数签名，使调用点可以前向引用（先调用后定义/
+    // 相互递归）
     for (const auto& decl : program.declarations) {
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
             registerFunctionSignature(static_cast<const FuncDeclaration&>(*decl));
@@ -139,6 +194,161 @@ void SemanticAnalyzer::appendGlobalSummary(const Symbol& symbol) {
     m_result.globals.add(std::move(summary));
 }
 
+// ---- struct / typedef 登记（PRD R1.2 第二批） ----
+
+void SemanticAnalyzer::registerStructDeclaration(const StructDeclaration& decl) {
+    // 前向声明：登记 incomplete 标签；对已完整标签重复前向声明幂等合法
+    if (decl.isForward) {
+        if (m_structs.find(decl.tag) == m_structs.end()) {
+            StructInfo info;
+            info.tag = decl.tag;
+            info.complete = false;
+            info.line = decl.line;
+            info.column = decl.column;
+            m_structs.emplace(decl.tag, std::move(info));
+        }
+        return;
+    }
+
+    auto existing = m_structs.find(decl.tag);
+    if (existing != m_structs.end() && existing->second.complete) {
+        reportError(decl.line,
+                    decl.column,
+                    "redefinition of 'struct " + decl.tag + "'");
+        return;
+    }
+
+    // 先登记 incomplete 标签：字段解析期间自引用（struct A { struct A a; } 与
+    // struct A { struct A* next; }）才能正确判型
+    {
+        StructInfo placeholder;
+        placeholder.tag = decl.tag;
+        placeholder.complete = false;
+        placeholder.line = decl.line;
+        placeholder.column = decl.column;
+        m_structs[decl.tag] = std::move(placeholder);
+    }
+
+    StructInfo info;
+    info.tag = decl.tag;
+    info.line = decl.line;
+    info.column = decl.column;
+    info.complete = true;
+
+    // 布局：成员按声明顺序排布，4 字节对齐、无填充（决策见 semantic.hpp）
+    int offset = 0;
+    std::set<std::string> seenMembers;
+    for (const auto& field : decl.fields) {
+        SemanticType fieldType = declaredType(field->type,
+                                              field->isStructTag,
+                                              field->pointerDepth,
+                                              field->isArray,
+                                              field->arraySize,
+                                              field->arrayDims,
+                                              field->line,
+                                              field->column,
+                                              true);
+
+        // void 成员
+        if (fieldType.kind == SemanticType::Kind::Void) {
+            reportError(field->line,
+                        field->column,
+                        "field '" + field->name + "' cannot have void type");
+        }
+        // incomplete struct 值成员（含数组元素；自引用仅允许经指针）
+        bool incompleteValue = false;
+        if (fieldType.kind == SemanticType::Kind::Struct) {
+            incompleteValue = !isCompleteStruct(fieldType.tag);
+        } else if (fieldType.kind == SemanticType::Kind::Array
+                   && fieldType.element->kind == SemanticType::Kind::Struct) {
+            incompleteValue = !isCompleteStruct(fieldType.element->tag);
+        }
+        if (incompleteValue) {
+            const std::string& tag = fieldType.kind == SemanticType::Kind::Struct
+                                       ? fieldType.tag
+                                       : fieldType.element->tag;
+            reportError(field->line,
+                        field->column,
+                        "field '" + field->name + "' has incomplete type 'struct " + tag
+                          + "'");
+        }
+
+        if (!seenMembers.insert(field->name).second) {
+            reportError(field->line,
+                        field->column,
+                        "duplicate member '" + field->name + "' in 'struct " + decl.tag
+                          + "'");
+        }
+
+        // 成员大小：数组按元素数 × 元素大小；其余按类型大小
+        int size = 0;
+        if (field->isArray) {
+            int elementSize = 4;
+            if (fieldType.kind == SemanticType::Kind::Array
+                && fieldType.element->kind == SemanticType::Kind::Struct) {
+                const StructInfo* elemInfo = lookupStruct(fieldType.element->tag);
+                elementSize = elemInfo != nullptr ? elemInfo->size : 4;
+            }
+            size = std::max(field->arraySize, 1) * elementSize;
+        } else {
+            size = typeSize(fieldType);
+        }
+        if (size <= 0) {
+            size = 4; // 已报错的字段占位，保持后续偏移对齐
+        }
+
+        StructField entry;
+        entry.name = field->name;
+        entry.type = std::move(fieldType);
+        entry.offset = offset;
+        entry.size = size;
+        entry.line = field->line;
+        entry.column = field->column;
+        offset += size;
+        info.fields.push_back(std::move(entry));
+    }
+
+    if (info.fields.empty()) {
+        // 空 struct 无意义：报错并保持 incomplete，后续使用由 incomplete 检查兜底
+        reportError(decl.line, decl.column, "struct '" + decl.tag + "' has no members");
+        info.complete = false;
+    }
+    info.size = offset;
+    m_structs[decl.tag] = std::move(info);
+}
+
+void SemanticAnalyzer::registerTypedefDeclaration(const TypedefDeclaration& decl) {
+    // 内联 struct 定义先登记（typedef struct { ... } Alias;）
+    if (decl.structDef) {
+        registerStructDeclaration(*decl.structDef);
+    }
+
+    SemanticType resolved = declaredType(decl.baseType,
+                                         decl.baseIsStruct,
+                                         decl.pointerDepth,
+                                         false,
+                                         0,
+                                         0,
+                                         decl.line,
+                                         decl.column,
+                                         true);
+
+    // typedef struct X X; 幂等（C 常见自引用别名写法）：登记别名后返回
+    if (resolved.kind == SemanticType::Kind::Struct && resolved.tag == decl.alias) {
+        m_typedefs.emplace(decl.alias, std::move(resolved));
+        return;
+    }
+
+    // 类型命名空间冲突：别名与已有 typedef/struct 标签同名（决策见 semantic.hpp）
+    if (m_typedefs.find(decl.alias) != m_typedefs.end()
+        || m_structs.find(decl.alias) != m_structs.end()) {
+        reportError(decl.line, decl.column, "redefinition of '" + decl.alias + "'");
+        return;
+    }
+
+    m_typedefs.emplace(decl.alias, std::move(resolved));
+}
+
 // ---- 声明登记 ----
 
 void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
@@ -146,19 +356,29 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
     symbol.kind = SymbolKind::Function;
     symbol.name = decl.name;
     // 返回类型在此处唯一校验（void* 等），诊断落在函数声明位置
-    symbol.type = declaredType(decl.returnType,
-                               decl.returnPointerDepth,
-                               false,
-                               0,
-                               0,
-                               decl.line,
-                               decl.column,
-                               true);
+    SemanticType returnType = declaredType(decl.returnType,
+                                           decl.returnIsStruct,
+                                           decl.returnPointerDepth,
+                                           false,
+                                           0,
+                                           0,
+                                           decl.line,
+                                           decl.column,
+                                           true);
+    if (returnType.kind == SemanticType::Kind::Struct
+        && !isCompleteStruct(returnType.tag)) {
+        reportError(decl.line,
+                    decl.column,
+                    "function '" + decl.name + "' has incomplete return type 'struct "
+                      + returnType.tag + "'");
+    }
+    symbol.type = std::move(returnType);
     symbol.line = decl.line;
     symbol.column = decl.column;
     for (const auto& param : decl.parameters) {
         // 参数类型的诊断在 checkFunctionBody 中统一报告，此处静默计算
         symbol.paramTypes.add(declaredType(param->type,
+                                           param->isStructTag,
                                            param->pointerDepth,
                                            param->isArray,
                                            param->arraySize,
@@ -174,6 +394,7 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
 
 void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
     SemanticType declared = declaredType(decl.type,
+                                         decl.isStructTag,
                                          decl.pointerDepth,
                                          decl.isArray,
                                          decl.arraySize,
@@ -181,11 +402,27 @@ void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
                                          decl.line,
                                          decl.column,
                                          true);
-    if (typeFromName(decl.type) == SemanticType::Void && decl.pointerDepth == 0
-        && !decl.isArray) {
+    if (declared.kind == SemanticType::Kind::Void) {
         reportError(decl.line,
                     decl.column,
                     "variable '" + decl.name + "' cannot have void type");
+    }
+    // incomplete struct 值（含数组元素）不可实例化
+    bool incompleteValue = false;
+    if (declared.kind == SemanticType::Kind::Struct) {
+        incompleteValue = !isCompleteStruct(declared.tag);
+    } else if (declared.kind == SemanticType::Kind::Array
+               && declared.element->kind == SemanticType::Kind::Struct) {
+        incompleteValue = !isCompleteStruct(declared.element->tag);
+    }
+    if (incompleteValue) {
+        const std::string& tag = declared.kind == SemanticType::Kind::Struct
+                                   ? declared.tag
+                                   : declared.element->tag;
+        reportError(decl.line,
+                    decl.column,
+                    "variable '" + decl.name + "' has incomplete type 'struct " + tag
+                      + "'");
     }
     Symbol symbol;
     symbol.kind = SymbolKind::Variable;
@@ -197,12 +434,11 @@ void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
         appendGlobalSummary(symbol);
     }
     if (decl.initializer) {
-        SemanticType initType = checkExpr(*decl.initializer);
-        checkConversion(initType,
-                        declared,
-                        decl.line,
-                        decl.column,
-                        "initialization of '" + decl.name + "'");
+        checkInitializer(*decl.initializer,
+                         declared,
+                         decl.name,
+                         decl.line,
+                         decl.column);
     }
 }
 
@@ -210,9 +446,21 @@ void SemanticAnalyzer::checkFunctionBody(const FuncDeclaration& decl) {
     m_currentFunction = &decl;
     pushScope();
 
+    // 返回类型：用于 return 检查与缺 return 判定（签名阶段已校验，此处静默重算）
+    const SemanticType fnReturnType = declaredType(decl.returnType,
+                                                   decl.returnIsStruct,
+                                                   decl.returnPointerDepth,
+                                                   false,
+                                                   0,
+                                                   0,
+                                                   decl.line,
+                                                   decl.column,
+                                                   false);
+
     // 参数登记在函数作用域内；解析器目前给参数记录的是函数的位置
     for (const auto& param : decl.parameters) {
         SemanticType paramType = declaredType(param->type,
+                                              param->isStructTag,
                                               param->pointerDepth,
                                               param->isArray,
                                               param->arraySize,
@@ -220,11 +468,17 @@ void SemanticAnalyzer::checkFunctionBody(const FuncDeclaration& decl) {
                                               param->line,
                                               param->column,
                                               true);
-        if (typeFromName(param->type) == SemanticType::Void && param->pointerDepth == 0
-            && !param->isArray) {
+        if (paramType.kind == SemanticType::Kind::Void) {
             reportError(param->line,
                         param->column,
                         "parameter '" + param->name + "' cannot have void type");
+        }
+        if (paramType.kind == SemanticType::Kind::Struct
+            && !isCompleteStruct(paramType.tag)) {
+            reportError(param->line,
+                        param->column,
+                        "parameter '" + param->name + "' has incomplete type 'struct "
+                          + paramType.tag + "'");
         }
         Symbol symbol;
         symbol.kind = SymbolKind::Parameter;
@@ -243,8 +497,7 @@ void SemanticAnalyzer::checkFunctionBody(const FuncDeclaration& decl) {
     }
 
     // return 覆盖检查（保守可达性，策略见 definitelyReturns 注释）
-    if (typeFromName(decl.returnType) != SemanticType::Void
-        && !definitelyReturns(*decl.body)) {
+    if (fnReturnType.kind != SemanticType::Kind::Void && !definitelyReturns(*decl.body)) {
         reportError(decl.line,
                     decl.column,
                     "missing return statement in non-void function '" + decl.name + "'");
@@ -256,6 +509,7 @@ void SemanticAnalyzer::checkFunctionBody(const FuncDeclaration& decl) {
 
 void SemanticAnalyzer::checkLocalVariable(const StmtVarDeclaration& decl) {
     SemanticType declared = declaredType(decl.type,
+                                         decl.isStructTag,
                                          decl.pointerDepth,
                                          decl.isArray,
                                          decl.arraySize,
@@ -263,11 +517,26 @@ void SemanticAnalyzer::checkLocalVariable(const StmtVarDeclaration& decl) {
                                          decl.line,
                                          decl.column,
                                          true);
-    if (typeFromName(decl.type) == SemanticType::Void && decl.pointerDepth == 0
-        && !decl.isArray) {
+    if (declared.kind == SemanticType::Kind::Void) {
         reportError(decl.line,
                     decl.column,
                     "variable '" + decl.name + "' cannot have void type");
+    }
+    bool incompleteValue = false;
+    if (declared.kind == SemanticType::Kind::Struct) {
+        incompleteValue = !isCompleteStruct(declared.tag);
+    } else if (declared.kind == SemanticType::Kind::Array
+               && declared.element->kind == SemanticType::Kind::Struct) {
+        incompleteValue = !isCompleteStruct(declared.element->tag);
+    }
+    if (incompleteValue) {
+        const std::string& tag = declared.kind == SemanticType::Kind::Struct
+                                   ? declared.tag
+                                   : declared.element->tag;
+        reportError(decl.line,
+                    decl.column,
+                    "variable '" + decl.name + "' has incomplete type 'struct " + tag
+                      + "'");
     }
     Symbol symbol;
     symbol.kind = SymbolKind::Variable;
@@ -277,12 +546,11 @@ void SemanticAnalyzer::checkLocalVariable(const StmtVarDeclaration& decl) {
     symbol.column = decl.column;
     declareVariable(symbol); // 冲突时已报错；登记失败则查找命中先登记的符号
     if (decl.initializer) {
-        SemanticType initType = checkExpr(*decl.initializer);
-        checkConversion(initType,
-                        declared,
-                        decl.line,
-                        decl.column,
-                        "initialization of '" + decl.name + "'");
+        checkInitializer(*decl.initializer,
+                         declared,
+                         decl.name,
+                         decl.line,
+                         decl.column);
     }
 }
 
@@ -383,6 +651,7 @@ void SemanticAnalyzer::checkReturn(const ReturnStmt& stmt) {
     }
     // 返回类型已在 registerFunctionSignature 中校验，此处静默重算
     const SemanticType returnType = declaredType(m_currentFunction->returnType,
+                                                 m_currentFunction->returnIsStruct,
                                                  m_currentFunction->returnPointerDepth,
                                                  false,
                                                  0,
@@ -391,7 +660,7 @@ void SemanticAnalyzer::checkReturn(const ReturnStmt& stmt) {
                                                  stmt.column,
                                                  false);
     if (stmt.value != nullptr) {
-        if (returnType == SemanticType::Void) {
+        if (returnType.kind == SemanticType::Kind::Void) {
             reportError(stmt.line,
                         stmt.column,
                         "void function '" + m_currentFunction->name
@@ -405,7 +674,7 @@ void SemanticAnalyzer::checkReturn(const ReturnStmt& stmt) {
                         stmt.column,
                         "return statement");
     } else {
-        if (returnType != SemanticType::Void) {
+        if (returnType.kind != SemanticType::Kind::Void) {
             reportError(stmt.line,
                         stmt.column,
                         "non-void function '" + m_currentFunction->name
@@ -442,6 +711,8 @@ SemanticType SemanticAnalyzer::checkExpr(const Expr& expr) {
         return checkIdentifier(static_cast<const IdentifierExpr&>(expr));
     case ASTNodeType::INDEX_EXPR:
         return checkIndex(static_cast<const IndexExpr&>(expr));
+    case ASTNodeType::MEMBER_EXPR:
+        return checkMember(static_cast<const MemberExpr&>(expr));
     case ASTNodeType::INTEGER_LITERAL:
         return SemanticType::Int;
     case ASTNodeType::CHAR_LITERAL:
@@ -511,6 +782,20 @@ SemanticType SemanticAnalyzer::checkAssign(const AssignExpr& expr) {
         // a[i] = v / p[i] = v：下标检查给出元素类型（内部已报告下标错误）
         targetType = checkIndex(static_cast<const IndexExpr&>(*expr.target));
         break;
+    case ASTNodeType::MEMBER_EXPR: {
+        // p.x = v / p->x = v：成员检查给出成员类型（内部已报告成员错误）
+        const auto& member = static_cast<const MemberExpr&>(*expr.target);
+        context = "assignment to member '" + member.member + "'";
+        targetType = checkMember(member);
+        if (isArrayType(targetType)) {
+            reportError(member.line,
+                        member.column,
+                        "cannot assign to array member '" + member.member
+                          + "' (arrays are not copyable)");
+            targetType = SemanticType::Error;
+        }
+        break;
+    }
     case ASTNodeType::UNARY_EXPR:
         // *p = v：解引用检查给出逐引用类型
         targetType = checkUnary(static_cast<const UnaryExpr&>(*expr.target));
@@ -541,16 +826,16 @@ SemanticType SemanticAnalyzer::checkBinary(const BinaryExpr& expr) {
         if (isScalar(l) && isScalar(r)) {
             return SemanticType::Int;
         }
-        if (l == r && (isPointer(l) || l == SemanticType::Null)) {
+        if (l == r && (isPointer(l) || l.kind == SemanticType::Kind::Null)) {
             return SemanticType::Int;
         }
         // 指针与 NULL 比较合法
-        if ((isPointer(l) && r == SemanticType::Null)
-            || (l == SemanticType::Null && isPointer(r))) {
+        if ((isPointer(l) && r.kind == SemanticType::Kind::Null)
+            || (l.kind == SemanticType::Kind::Null && isPointer(r))) {
             return SemanticType::Int;
         }
-        if ((isPointer(l) || l == SemanticType::Null)
-            && (isPointer(r) || r == SemanticType::Null)) {
+        if ((isPointer(l) || l.kind == SemanticType::Kind::Null)
+            && (isPointer(r) || r.kind == SemanticType::Kind::Null)) {
             reportError(expr.line,
                         expr.column,
                         "comparison between distinct pointer types '" + typeName(left)
@@ -583,7 +868,7 @@ SemanticType SemanticAnalyzer::checkBinary(const BinaryExpr& expr) {
         if (isScalar(l) && isScalar(r)) {
             return SemanticType::Int;
         }
-        // 指针 ± 整数：按指向类型大小缩放（当前全部 4 字节）
+        // 指针 ± 整数：按指向类型大小缩放（标量/指针 4 字节，struct 按布局）
         if (op == "+" && isPointer(l) && isScalar(r)) {
             return l;
         }
@@ -637,7 +922,7 @@ SemanticType SemanticAnalyzer::checkUnary(const UnaryExpr& expr) {
     return SemanticType::Int;
 }
 
-// &x：操作数必须是左值（x / a[i] / *p），结果为 pointer-to-T
+// &x：操作数必须是左值（x / a[i] / *p / p.x），结果为 pointer-to-T
 SemanticType SemanticAnalyzer::checkAddressOf(const UnaryExpr& expr) {
     const Expr& operand = *expr.operand;
 
@@ -668,19 +953,18 @@ SemanticType SemanticAnalyzer::checkAddressOf(const UnaryExpr& expr) {
           "cannot take the address of an array (it already decays to a pointer)");
         return SemanticType::Error;
     }
-    if (!isScalar(type) && !isPointer(type)) {
+    if (isPointer(type)) {
+        // & 一级指针 → 二级指针，本里程碑不支持
+        reportError(expr.line, expr.column, "multi-level pointers are not supported");
+        return SemanticType::Error;
+    }
+    if (!isScalar(type) && type.kind != SemanticType::Kind::Struct) {
         reportError(operand.line,
                     operand.column,
                     "cannot take the address of this expression");
         return SemanticType::Error;
     }
-    SemanticType result = pointerTo(type);
-    if (result == SemanticType::Error) {
-        // & 一级指针 → 二级指针，本里程碑不支持
-        reportError(expr.line, expr.column, "multi-level pointers are not supported");
-        return SemanticType::Error;
-    }
-    return result;
+    return SemanticType::pointerTo(type);
 }
 
 // *p：操作数必须是指针，结果为其指向类型；char* 受字节打包限制不可解引用
@@ -689,17 +973,17 @@ SemanticType SemanticAnalyzer::checkDereference(const UnaryExpr& expr) {
     if (operand == SemanticType::Error) {
         return SemanticType::Error;
     }
-    if (operand == SemanticType::IntPtr) {
-        return SemanticType::Int;
+    if (operand.kind == SemanticType::Kind::Pointer) {
+        if (operand.element->kind == SemanticType::Kind::Char) {
+            reportError(expr.operand->line,
+                        expr.operand->column,
+                        "cannot dereference 'char*' (string literals are byte-packed; "
+                        "copy into a char array via a host function instead)");
+            return SemanticType::Error;
+        }
+        return *operand.element;
     }
-    if (operand == SemanticType::CharPtr) {
-        reportError(expr.operand->line,
-                    expr.operand->column,
-                    "cannot dereference 'char*' (string literals are byte-packed; "
-                    "copy into a char array via a host function instead)");
-        return SemanticType::Error;
-    }
-    if (operand == SemanticType::Null) {
+    if (operand.kind == SemanticType::Kind::Null) {
         reportError(expr.operand->line,
                     expr.operand->column,
                     "cannot dereference 'NULL'");
@@ -711,7 +995,8 @@ SemanticType SemanticAnalyzer::checkDereference(const UnaryExpr& expr) {
     return SemanticType::Error;
 }
 
-// a[i] / p[i]：base 为数组（不退化，元素按 4 字节槽存放）或指针；下标必须是标量
+// a[i] / p[i]：base 为数组（不退化）或指针；下标必须是标量。
+// char* 受字节打包限制不可下标；struct 数组/struct 指针下标得 struct 值
 SemanticType SemanticAnalyzer::checkIndex(const IndexExpr& expr) {
     SemanticType base = checkExpr(*expr.base);
     SemanticType index = checkExpr(*expr.index);
@@ -725,23 +1010,130 @@ SemanticType SemanticAnalyzer::checkIndex(const IndexExpr& expr) {
     if (base == SemanticType::Error) {
         return SemanticType::Error;
     }
-    switch (base) {
-    case SemanticType::IntPtr:
-    case SemanticType::IntArray:
-        return SemanticType::Int;
-    case SemanticType::CharArray:
-        return SemanticType::Char;
-    case SemanticType::CharPtr:
+    if (base.kind == SemanticType::Kind::Array) {
+        return *base.element;
+    }
+    if (base.kind == SemanticType::Kind::Pointer) {
+        if (base.element->kind == SemanticType::Kind::Char) {
+            reportError(expr.base->line,
+                        expr.base->column,
+                        "cannot index through 'char*' (string literals are byte-packed; "
+                        "copy into a char array via a host function instead)");
+            return SemanticType::Error;
+        }
+        return *base.element;
+    }
+    reportError(expr.base->line,
+                expr.base->column,
+                "subscripted value is not an array or pointer");
+    return SemanticType::Error;
+}
+
+// p.x / p->x：dot 要求 base 为 struct 值，arrow 要求 base 为 struct 指针
+// （arrow 等价 (*p).x）；成员类型查 struct 布局表
+SemanticType SemanticAnalyzer::checkMember(const MemberExpr& expr) {
+    SemanticType base = checkExpr(*expr.base);
+    if (base == SemanticType::Error) {
+        return SemanticType::Error;
+    }
+
+    if (expr.arrow) {
+        if (base.kind != SemanticType::Kind::Pointer
+            || base.element->kind != SemanticType::Kind::Struct) {
+            reportError(expr.base->line,
+                        expr.base->column,
+                        "'->' requires a pointer to struct, but operand has type '"
+                          + typeName(base) + "'");
+            return SemanticType::Error;
+        }
+        base = *base.element;
+    } else {
+        if (base.kind == SemanticType::Kind::Pointer
+            && base.element->kind == SemanticType::Kind::Struct) {
+            reportError(expr.base->line,
+                        expr.base->column,
+                        "member access through pointer type '" + typeName(base)
+                          + "'; use '->'");
+            return SemanticType::Error;
+        }
+        if (base.kind != SemanticType::Kind::Struct) {
+            reportError(expr.base->line,
+                        expr.base->column,
+                        "member access on non-struct type '" + typeName(base) + "'");
+            return SemanticType::Error;
+        }
+    }
+
+    const StructInfo* info = lookupStruct(base.tag);
+    if (info == nullptr || !info->complete) {
         reportError(expr.base->line,
                     expr.base->column,
-                    "cannot index through 'char*' (string literals are byte-packed; "
-                    "copy into a char array via a host function instead)");
+                    "member access into incomplete type 'struct " + base.tag + "'");
         return SemanticType::Error;
-    default:
-        reportError(expr.base->line,
-                    expr.base->column,
-                    "subscripted value is not an array or pointer");
-        return SemanticType::Error;
+    }
+    for (const auto& field : info->fields) {
+        if (field.name == expr.member) {
+            return field.type;
+        }
+    }
+    reportError(expr.line,
+                expr.column,
+                "struct '" + base.tag + "' has no member named '" + expr.member + "'");
+    return SemanticType::Error;
+}
+
+// 声明初始化器：普通表达式走 checkConversion；{ ... } 仅限完整 struct 变量
+// （逐成员扁平、长度与成员数一致）；数组与标量目标的初始化列表报错
+void SemanticAnalyzer::checkInitializer(const Expr& initializer,
+                                        const SemanticType& declared,
+                                        const std::string& declName,
+                                        int line,
+                                        int column) {
+    if (initializer.type != ASTNodeType::INIT_LIST_EXPR) {
+        SemanticType initType = checkExpr(initializer);
+        checkConversion(initType,
+                        declared,
+                        line,
+                        column,
+                        "initialization of '" + declName + "'");
+        return;
+    }
+
+    if (declared.kind == SemanticType::Kind::Array) {
+        reportError(line, column, "array initializers are not supported");
+        return;
+    }
+    if (declared.kind != SemanticType::Kind::Struct) {
+        reportError(line,
+                    column,
+                    "brace initializer is only supported for struct types");
+        return;
+    }
+    const StructInfo* info = lookupStruct(declared.tag);
+    if (info == nullptr || !info->complete) {
+        return; // incomplete 已在声明处报错
+    }
+
+    const auto& initList = static_cast<const InitListExpr&>(initializer);
+    if (initList.values.size() != info->fields.size()) {
+        reportError(line,
+                    column,
+                    "initializer for struct '" + declared.tag + "' expects "
+                      + std::to_string(info->fields.size()) + " value(s), but got "
+                      + std::to_string(initList.values.size()));
+        // 仍逐个检查已提供的值，尽量多收集错误
+    }
+    const ca::usize checkCount =
+      std::min(initList.values.size(), static_cast<ca::usize>(info->fields.size()));
+    for (ca::usize i = 0; i < checkCount; ++i) {
+        const StructField& field = info->fields[static_cast<size_t>(i)];
+        SemanticType valueType = checkExpr(*initList.values[i]);
+        checkConversion(valueType,
+                        field.type,
+                        initList.values[i]->line,
+                        initList.values[i]->column,
+                        "initialization of field '" + field.name + "' of '" + declName
+                          + "'");
     }
 }
 
@@ -790,8 +1182,14 @@ SemanticType SemanticAnalyzer::checkCall(const CallExpr& expr) {
 
 void SemanticAnalyzer::checkCondition(const Expr& expr) {
     SemanticType type = decayed(checkExpr(expr));
-    if (type == SemanticType::Void) {
+    if (type.kind == SemanticType::Kind::Void) {
         reportError(expr.line, expr.column, "void value used as condition");
+        return;
+    }
+    if (type.kind == SemanticType::Kind::Struct) {
+        reportError(expr.line,
+                    expr.column,
+                    "struct value used as condition ('" + typeName(type) + "')");
     }
     // Error：子表达式已报错，静默；标量/指针/NULL：非零为真，均可
 }
@@ -803,31 +1201,31 @@ void SemanticAnalyzer::checkConversion(
     }
     if (from == to) {
         if (isArrayType(from)) {
-            // 数组整体拷贝不支持（PRD R1.2）：初始化/赋值/传参中数组只能退化
+            // 数组整体拷贝不支持（PRD R1.2）：初始化/赋值/传参中数组只能退化；
+            // struct 值相等则逐字拷贝，合法
             reportError(line,
                         column,
                         "cannot copy array of type '" + typeName(from) + "' in "
                           + context);
         }
-        return; // int→int、char→char、同型指针
+        return; // int→int、char→char、同型指针、同标签 struct
     }
-    if (from == SemanticType::Char && to == SemanticType::Int) {
+    if (from.kind == SemanticType::Kind::Char && to.kind == SemanticType::Kind::Int) {
         return; // 提升：char 在需要 int 的场合无损加宽
     }
-    if (from == SemanticType::IntArray && to == SemanticType::IntPtr) {
-        return; // 数组退化：int[] → int*（传参/赋值/返回）
+    // 数组退化：Array(elem) → Pointer(elem)（int[]/char[]/struct T[]）
+    if (from.kind == SemanticType::Kind::Array && to.kind == SemanticType::Kind::Pointer
+        && *from.element == *to.element) {
+        return;
     }
-    if (from == SemanticType::CharArray && to == SemanticType::CharPtr) {
-        return; // 数组退化：char[] → char*
-    }
-    if (from == SemanticType::Null && isPointer(to)) {
+    if (from.kind == SemanticType::Kind::Null && isPointer(to)) {
         return; // NULL 可赋给任意指针类型
     }
-    if (from == SemanticType::Void) {
+    if (from.kind == SemanticType::Kind::Void) {
         reportError(line, column, "void value used in " + context);
         return;
     }
-    if (from == SemanticType::Int && to == SemanticType::Char) {
+    if (from.kind == SemanticType::Kind::Int && to.kind == SemanticType::Kind::Char) {
         // 窄化转换：当前语言没有显式转换语法，为避免静默截断一律拒绝
         reportError(line, column, "cannot implicitly convert int to char in " + context);
         return;
@@ -839,7 +1237,8 @@ void SemanticAnalyzer::checkConversion(
                       + typeName(to) + "') in " + context);
         return;
     }
-    // 其余一律拒绝：指针与标量互转、数组与标量、NULL 与标量等
+    // 其余一律拒绝：指针与标量互转、数组与标量、NULL 与标量、struct 与标量、
+    // 不同 struct 之间等
     reportError(line,
                 column,
                 "cannot convert '" + typeName(from) + "' to '" + typeName(to) + "' in "
@@ -880,88 +1279,56 @@ void SemanticAnalyzer::reportError(int line, int column, const std::string& mess
     m_result.diagnostics.add(std::move(diagnostic));
 }
 
-SemanticType SemanticAnalyzer::typeFromName(const std::string& name) {
-    if (name == "int") {
-        return SemanticType::Int;
-    }
-    if (name == "char") {
-        return SemanticType::Char;
-    }
-    if (name == "void") {
-        return SemanticType::Void;
-    }
-    return SemanticType::Error; // 解析器只产出 int/char/void；防御式兜底
-}
-
-std::string SemanticAnalyzer::typeName(SemanticType type) {
-    switch (type) {
-    case SemanticType::Int:
+std::string SemanticAnalyzer::typeName(const SemanticType& type) {
+    switch (type.kind) {
+    case SemanticType::Kind::Int:
         return "int";
-    case SemanticType::Char:
+    case SemanticType::Kind::Char:
         return "char";
-    case SemanticType::Void:
+    case SemanticType::Kind::Void:
         return "void";
-    case SemanticType::Error:
+    case SemanticType::Kind::Error:
         return "<error>";
-    case SemanticType::IntPtr:
-        return "int*";
-    case SemanticType::CharPtr:
-        return "char*";
-    case SemanticType::IntArray:
-        return "int[]";
-    case SemanticType::CharArray:
-        return "char[]";
-    case SemanticType::Null:
+    case SemanticType::Kind::Null:
         return "NULL";
+    case SemanticType::Kind::Pointer:
+        return typeName(*type.element) + "*";
+    case SemanticType::Kind::Array:
+        return typeName(*type.element) + "[]";
+    case SemanticType::Kind::Struct:
+        return "struct " + type.tag;
     }
     return "<error>";
 }
 
-bool SemanticAnalyzer::isScalar(SemanticType type) {
-    return type == SemanticType::Int || type == SemanticType::Char;
+bool SemanticAnalyzer::isScalar(const SemanticType& type) {
+    return type.kind == SemanticType::Kind::Int
+           || type.kind == SemanticType::Kind::Char;
 }
 
 // ---- 类型工具（PRD R1.2） ----
 
 SemanticType SemanticAnalyzer::pointerTo(SemanticType t) {
-    switch (t) {
-    case SemanticType::Int:
-        return SemanticType::IntPtr;
-    case SemanticType::Char:
-        return SemanticType::CharPtr;
-    default:
-        return SemanticType::Error; // void*/多级指针不可构造
-    }
+    return SemanticType::pointerTo(std::move(t));
 }
 
 SemanticType SemanticAnalyzer::arrayOf(SemanticType t) {
-    switch (t) {
-    case SemanticType::Int:
-        return SemanticType::IntArray;
-    case SemanticType::Char:
-        return SemanticType::CharArray;
-    default:
-        return SemanticType::Error;
-    }
+    return SemanticType::arrayOf(std::move(t));
 }
 
 SemanticType SemanticAnalyzer::decayed(SemanticType t) {
-    switch (t) {
-    case SemanticType::IntArray:
-        return SemanticType::IntPtr;
-    case SemanticType::CharArray:
-        return SemanticType::CharPtr;
-    default:
-        return t;
+    if (t.kind == SemanticType::Kind::Array) {
+        return SemanticType::pointerTo(*t.element);
     }
+    return t;
 }
 
 bool SemanticAnalyzer::isPointer(SemanticType type) {
-    return type == SemanticType::IntPtr || type == SemanticType::CharPtr;
+    return type.kind == SemanticType::Kind::Pointer;
 }
 
 bool SemanticAnalyzer::isArrayType(SemanticType type) {
-    return type == SemanticType::IntArray || type == SemanticType::CharArray;
+    return type.kind == SemanticType::Kind::Array;
 }
 
 bool SemanticAnalyzer::isLValueExpr(const Expr& expr) {
@@ -971,14 +1338,52 @@ bool SemanticAnalyzer::isLValueExpr(const Expr& expr) {
         return true;
     case ASTNodeType::UNARY_EXPR:
         return static_cast<const UnaryExpr&>(expr).op == "*";
+    case ASTNodeType::MEMBER_EXPR: {
+        const auto& member = static_cast<const MemberExpr&>(expr);
+        // p->x 等价 (*p).x，恒为左值；p.x 取决于 p 是否左值
+        return member.arrow || isLValueExpr(*member.base);
+    }
     default:
         return false;
     }
 }
 
-// 由声明的类型要素计算语义类型；不合法组合（多级指针/多维数组/指针数组/
-// 越界长度/void* /void[]）按 report 决定是否报错，返回 Error 毒类型
+// ---- struct 布局查询 ----
+
+const StructInfo* SemanticAnalyzer::lookupStruct(const std::string& tag) const {
+    auto it = m_structs.find(tag);
+    return it != m_structs.end() ? &it->second : nullptr;
+}
+
+int SemanticAnalyzer::typeSize(const SemanticType& type) const {
+    switch (type.kind) {
+    case SemanticType::Kind::Int:
+    case SemanticType::Kind::Char:
+    case SemanticType::Kind::Void:
+    case SemanticType::Kind::Error:
+    case SemanticType::Kind::Null:
+    case SemanticType::Kind::Pointer:
+        return 4;
+    case SemanticType::Kind::Struct: {
+        const StructInfo* info = lookupStruct(type.tag);
+        return info != nullptr ? info->size : 0;
+    }
+    case SemanticType::Kind::Array:
+        // 数组长度不在类型内：由声明处结合 arraySize 计算，此处不使用
+        return 0;
+    }
+    return 0;
+}
+
+bool SemanticAnalyzer::isCompleteStruct(const std::string& tag) const {
+    const StructInfo* info = lookupStruct(tag);
+    return info != nullptr && info->complete;
+}
+
+// 由声明的类型要素计算语义类型；不合法组合（未知类型/多级指针/多维数组/
+// 指针数组/越界长度/void* /void[]）按 report 决定是否报错，返回 Error 毒类型
 SemanticType SemanticAnalyzer::declaredType(const std::string& baseName,
+                                            bool isStructTag,
                                             int pointerDepth,
                                             bool isArray,
                                             int arraySize,
@@ -987,16 +1392,40 @@ SemanticType SemanticAnalyzer::declaredType(const std::string& baseName,
                                             int column,
                                             bool report) {
     const std::string stars(static_cast<size_t>(pointerDepth), '*');
-    const std::string typeText = baseName + stars;
+    const std::string typeText = (isStructTag ? "struct " : "") + baseName + stars;
 
-    SemanticType base = typeFromName(baseName);
-    if (base == SemanticType::Error) {
+    // 解析基型：builtin → typedef 别名 → struct 标签（合并的类型命名空间）
+    SemanticType base;
+    bool known = false;
+    if (!isStructTag) {
+        if (baseName == "int") {
+            base = SemanticType::Int;
+            known = true;
+        } else if (baseName == "char") {
+            base = SemanticType::Char;
+            known = true;
+        } else if (baseName == "void") {
+            base = SemanticType::Void;
+            known = true;
+        } else {
+            auto it = m_typedefs.find(baseName);
+            if (it != m_typedefs.end()) {
+                base = it->second;
+                known = true;
+            }
+        }
+    } else if (m_structs.find(baseName) != m_structs.end()) {
+        base = SemanticType::structOf(baseName);
+        known = true;
+    }
+    if (!known) {
         if (report) {
-            reportError(line, column, "unknown type '" + baseName + "'");
+            reportError(line, column, "unknown type '" + typeText + "'");
         }
         return SemanticType::Error;
     }
-    if (pointerDepth > 1) {
+
+    if (pointerDepth > 1 || (pointerDepth == 1 && base.kind == SemanticType::Kind::Pointer)) {
         if (report) {
             reportError(line,
                         column,
@@ -1004,6 +1433,7 @@ SemanticType SemanticAnalyzer::declaredType(const std::string& baseName,
         }
         return SemanticType::Error;
     }
+
     if (isArray) {
         if (pointerDepth > 0) {
             if (report) {
@@ -1026,7 +1456,7 @@ SemanticType SemanticAnalyzer::declaredType(const std::string& baseName,
             }
             return SemanticType::Error;
         }
-        if (base == SemanticType::Void) {
+        if (base.kind == SemanticType::Kind::Void) {
             if (report) {
                 reportError(line, column, "cannot declare array of 'void'");
             }
@@ -1034,12 +1464,15 @@ SemanticType SemanticAnalyzer::declaredType(const std::string& baseName,
         }
         return arrayOf(base);
     }
+
     if (pointerDepth == 1) {
-        SemanticType result = pointerTo(base);
-        if (result == SemanticType::Error && report) {
-            reportError(line, column, "'" + typeText + "' is not supported");
+        if (base.kind == SemanticType::Kind::Void) {
+            if (report) {
+                reportError(line, column, "'" + typeText + "' is not supported");
+            }
+            return SemanticType::Error;
         }
-        return result;
+        return pointerTo(base);
     }
     return base;
 }
