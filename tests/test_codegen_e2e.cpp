@@ -235,6 +235,19 @@ TEST(CodegenE2ETest, StringLiteralToHostStrlen) {
     std::remove("codegen_e2e_strlen.nci");
 }
 
+// extern 声明（PRD R3）+ 宿主桩：语言级声明路径的 callx 发射与返回值取回。
+// 声明提供签名（返回类型进 IR），宿主函数翻倍实参验证参数与返回通路
+TEST(CodegenE2ETest, ExternDeclaredHostCall) {
+    std::string source = "extern int dbl(int v);\n"
+                         "int main() { return dbl(20) + 2; }";
+    EXPECT_EQ(runProgram(source,
+                         "codegen_e2e_extern.nci",
+                         "dbl",
+                         [](int32_t* regs, int8_t*, int32_t) { return regs[0] * 2; }),
+              42);
+    std::remove("codegen_e2e_extern.nci");
+}
+
 // ---------------------------------------------------------------------------
 // R1.2 类型系统扩展（第二批）：struct 传参/返回 / 自引用链表 / typedef
 // ---------------------------------------------------------------------------
