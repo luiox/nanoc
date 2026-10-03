@@ -1,3 +1,4 @@
+#include "ncc/c_backend.hpp"
 #include "ncc/codegen.hpp"
 #include "ncc/ir.hpp"
 #include "ncc/lexer.hpp"
@@ -19,7 +20,7 @@ namespace {
     ca::opt::Command make_command() {
         ca::opt::Command root;
         root.name = "ncc";
-        root.help = "NanoC compiler: compile .nc sources to VM assembly (.nas)";
+        root.help = "NanoC compiler: compile .nc sources to VM assembly (.nas) or C";
         root.usage = "ncc [options] <file.nc>...";
 
         ca::opt::Arg files;
@@ -39,7 +40,7 @@ namespace {
         emit.kind = ca::opt::OptKind::String;
         emit.default_value = "asm";
         emit.metavar = "<kind>";
-        emit.help = "output kind: asm; c/llvm/obj/exe reserved";
+        emit.help = "output kind: asm|c; llvm/obj/exe reserved";
 
         ca::opt::Arg mmd;
         mmd.name = "MMD";
@@ -144,9 +145,9 @@ int main(int argc, char* argv[]) {
     }
 
     const std::string emit_kind = options.get("emit");
-    if (emit_kind != "asm") {
+    if (emit_kind != "asm" && emit_kind != "c") {
         std::cerr << "ncc: error: --emit=" << emit_kind
-                  << " is not supported yet (available: asm)\n";
+                  << " is not supported yet (available: asm, c)\n";
         return 1;
     }
 
@@ -194,6 +195,37 @@ int main(int argc, char* argv[]) {
 
         if (options.has("dump-ir")) {
             print_text(std::cerr, module.dump());
+        }
+
+        // --emit=c（PRD R4）：IR → 可读 C（差分测试 oracle 与 xmake rule 一期
+        // 产物）。错误处理与 --emit=asm 一致：发射异常按编译错误退出非 0
+        if (emit_kind == "c") {
+            std::string cSource;
+            try {
+                cSource = c_backend::emit(module);
+            } catch (const std::exception& e) {
+                std::cerr << "ncc: error: " << e.what() << "\n";
+                return 1;
+            }
+
+            std::string c_out_path = options.get("output");
+            if (c_out_path.empty()) {
+                c_out_path = replace_extension(inputs.front(), ".c");
+            }
+            if (!write_file(c_out_path, cSource)) {
+                return 1;
+            }
+
+            if (options.has("MMD")) {
+                std::string dep_path = options.get("MF");
+                if (dep_path.empty()) {
+                    dep_path = replace_extension(c_out_path, ".d");
+                }
+                if (!write_file(dep_path, make_depfile(c_out_path, loaded.loadOrder))) {
+                    return 1;
+                }
+            }
+            return 0;
         }
 
         // 多文件 mangle 所需的顶层符号链接信息（IR 未建模 sourceFile/export，

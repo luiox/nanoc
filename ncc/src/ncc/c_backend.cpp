@@ -538,16 +538,64 @@ namespace c_backend {
                 }
             }
 
+            // extern 声明的 C 签名（PRD R3）：带参数类型与名字的完整原型；
+            // varargs 尾部发射 ...；空参数表统一 (void)
+            std::string cExternSignature(const ir::IrExternDecl& ext) const {
+                std::string params;
+                if (ext.params.empty() && !ext.isVariadic) {
+                    params = "void";
+                } else {
+                    for (size_t i = 0; i < ext.params.size(); ++i) {
+                        if (i > 0) {
+                            params += ", ";
+                        }
+                        params += cDeclarator(ext.params[i].type, ext.params[i].name);
+                    }
+                    if (ext.isVariadic) {
+                        if (!ext.params.empty()) {
+                            params += ", ";
+                        }
+                        params += "...";
+                    }
+                }
+                return "extern " + cTypeName(ext.returnType) + " " + ext.name + "("
+                       + params + ")";
+            }
+
             void emitExternPrototypes(std::ostringstream& out) const {
-                if (m_externNames.empty()) {
+                // 声明的 extern（PRD R3）：按声明发射带签名 C 原型
+                // 未解析外部（#37 兼容路径）：调用点 callee 无定义且无 extern
+                // 声明（跳过语义门禁的降级输入），沿用无参原型
+                std::vector<std::string> unresolved;
+                for (const auto& name : m_externNames) {
+                    bool declared = false;
+                    for (const auto& ext : m_module.externs) {
+                        if (ext.name == name) {
+                            declared = true;
+                            break;
+                        }
+                    }
+                    if (!declared) {
+                        unresolved.push_back(name);
+                    }
+                }
+                if (m_module.externs.empty() && unresolved.empty()) {
                     return;
                 }
                 out << "\n";
-                out
-                  << "// unresolved externals (calls to functions not defined in this\n";
-                out << "// module; IR has no extern declarations until R3 lands)\n";
-                for (const auto& name : m_externNames) {
-                    out << "extern int32_t " << name << "();\n";
+                if (!m_module.externs.empty()) {
+                    out << "// extern declarations: host-provided C functions\n";
+                    for (const auto& ext : m_module.externs) {
+                        out << cExternSignature(ext) << ";\n";
+                    }
+                }
+                if (!unresolved.empty()) {
+                    out << "// unresolved externals (calls to functions not defined "
+                           "in this\n";
+                    out << "// module and without an extern declaration)\n";
+                    for (const auto& name : unresolved) {
+                        out << "extern int32_t " << name << "();\n";
+                    }
                 }
             }
 

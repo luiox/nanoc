@@ -60,10 +60,10 @@
 //   有效 NanoC 程序不读未初始化值，差分程序需全量初始化。
 // - 链接性：函数/全局用外部链接（R7 独立编译链接交系统链接器，多模块
 //   符号互见）；字符串池 static（纯内部实现细节）。
-// - extern 原型：IR 尚无 extern 声明节点（R3 未落地），凡调用点 callee 不在
-//   module.functions 中即视为未解析外部函数，统一发射无参原型
-//   `extern <ret> name();`（C17 无原型调用合法，int/char* 实参经默认提升
-//   兼容 put 型场景）；返回类型未知（lower 记 Error）时兜底 int32_t。
+// - extern 原型：module.externs（PRD R3）按声明发射带签名 C 原型
+//   `extern <ret> name(params);`，varargs 尾部发射 `...`；仅当调用点 callee
+//   既无定义又无 extern 声明时（跳过语义门禁的降级输入）沿用无参原型
+//   `extern <ret> name();`（#37 兼容路径）；返回类型未知时兜底 int32_t。
 //
 // 输出形态：结构化缩进（4 空格、K&R）、块语句加大括号、函数/结构体带
 // `// func:` / `// struct:` 行注释保留 NanoC 源类型拼写（溯源到 IR dump）。
