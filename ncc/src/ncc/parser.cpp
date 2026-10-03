@@ -2,7 +2,22 @@
 #include <sstream>
 #include <stdexcept>
 
-Parser::Parser(const std::vector<Token>& tokens, std::string fileName)
+namespace {
+
+    // R9 头文件模式接受的 C 限定符/修饰符（语义忽略——决策记录：
+    // const/volatile/static/inline/register 为纯限定符；unsigned/signed/
+    // long/short 按宿主基础类型解释，VM 字宽 32 位、无符号语义不建模）
+    bool isHeaderQualifierWord(const std::string& value) {
+        return value == "const" || value == "volatile" || value == "static"
+               || value == "inline" || value == "register" || value == "unsigned"
+               || value == "signed" || value == "long" || value == "short";
+    }
+
+} // namespace
+
+Parser::Parser(const std::vector<Token>& tokens,
+               std::string fileName,
+               const std::set<std::string>& externalTypedefNames)
   : m_tokens(tokens), m_pos(0), m_fileName(std::move(fileName)) {
     // 预扫描 typedef 别名（文件作用域）。语句/声明按首 token 分发，需要先于
     // 解析知道哪些标识符是类型别名。别名恒为 `typedef ... <ident> ;` 中
@@ -40,6 +55,9 @@ Parser::Parser(const std::vector<Token>& tokens, std::string fileName)
             m_typedefNames.insert(m_tokens[lastIdentifier].value);
         }
     }
+    // 单元级已知别名（PRD R9）：头文件先于包含者解析，其 typedef 名注入
+    // 后续文件，跨文件 `PointT p;` 才能按类型声明解析
+    m_typedefNames.insert(externalTypedefNames.begin(), externalTypedefNames.end());
 }
 
 bool Parser::isTypedefName(const std::string& name) const {
@@ -180,13 +198,16 @@ std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported) {
         return parseTypedefDeclaration();
     }
 
-    // 类型开头：builtin 关键字、struct 或 typedef 别名
+    // 类型开头：builtin 关键字、struct、typedef 别名；头文件模式（PRD R9）
+    // 另接受 C 限定符/修饰符开头的声明（const unsigned int 等，语义忽略）
     if (currentToken().kind == NTokenKind::KEYWORD_INT
         || currentToken().kind == NTokenKind::KEYWORD_CHAR
         || currentToken().kind == NTokenKind::KEYWORD_VOID
         || currentToken().kind == NTokenKind::KEYWORD_STRUCT
         || (currentToken().kind == NTokenKind::IDENTIFIER
-            && isTypedefName(currentToken().value))) {
+            && isTypedefName(currentToken().value))
+        || (m_headerMode && currentToken().kind == NTokenKind::IDENTIFIER
+            && isHeaderQualifierWord(currentToken().value))) {
 
         // 保存当前位置
         size_t startPos = m_pos;
@@ -225,6 +246,11 @@ std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported) {
         advance();
 
         if (currentToken().kind == NTokenKind::DELIMITER_LPAREN) {
+            // R9 头文件函数原型：`int f(int x);`（参数表后随 ';'，无函数体）
+            if (m_headerMode && isPrototypeForm(m_pos)) {
+                m_pos = startPos; // 回退（含类型前缀上的限定符）
+                return parsePrototypeDeclaration();
+            }
             // 函数声明
             m_pos = startPos; // 回退
             auto funcDecl = parseFuncDeclaration();
@@ -250,11 +276,21 @@ std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported) {
 }
 
 // 类型前缀：builtin 关键字、`struct Tag` 或 typedef 别名；line/column 返回
-// 首个 token 位置
+// 首个 token 位置。头文件模式（PRD R9）先消费 C 限定符/修饰符链（语义忽略，
+// 裸修饰符按 int 解释）
 std::string Parser::parseTypePrefix(bool& isStructTag, int& line, int& column) {
     isStructTag = false;
     line = currentToken().line;
     column = currentToken().column;
+
+    if (m_headerMode) {
+        const bool sawBaseModifier = skipHeaderQualifiers();
+        // `unsigned x` / `long f(void)`：修饰符即基类型（按 int 解释——决策
+        // 记录：VM 字宽 32 位，无 unsigned/long 尺寸建模）
+        if (sawBaseModifier && !isTypeStart()) {
+            return "int";
+        }
+    }
 
     if (currentToken().kind == NTokenKind::KEYWORD_STRUCT) {
         advance();
@@ -285,6 +321,68 @@ std::string Parser::parseTypePrefix(bool& isStructTag, int& line, int& column) {
 
     error("Expected type keyword");
     return "";
+}
+
+// R9 头文件模式：消费 C 限定符/修饰符链。决策记录：const/volatile/static/
+// inline/register 为纯限定符（语义忽略——static 的内部链接、register 的
+// 存储提示均不建模）；unsigned/signed/long/short 按宿主基础类型解释（VM
+// 字宽 32 位，无符号/长型尺寸不建模，统一按 int 参与类型检查）。float/
+// double 显式报不支持（VM 无浮点，宁报错不误编译）。
+bool Parser::skipHeaderQualifiers() {
+    bool sawBaseModifier = false;
+    while (currentToken().kind == NTokenKind::IDENTIFIER
+           && isHeaderQualifierWord(currentToken().value)) {
+        const std::string& value = currentToken().value;
+        if (value == "unsigned" || value == "signed" || value == "long"
+            || value == "short") {
+            sawBaseModifier = true;
+        }
+        advance();
+    }
+    if (currentToken().kind == NTokenKind::IDENTIFIER
+        && (currentToken().value == "float" || currentToken().value == "double")) {
+        error("floating-point types are not supported (R9 header subset)");
+    }
+    return sawBaseModifier;
+}
+
+// 当前 token 是否开始一个类型（builtin/struct/typedef 别名）
+bool Parser::isTypeStart() const {
+    switch (currentToken().kind) {
+    case NTokenKind::KEYWORD_INT:
+    case NTokenKind::KEYWORD_CHAR:
+    case NTokenKind::KEYWORD_VOID:
+    case NTokenKind::KEYWORD_STRUCT:
+        return true;
+    case NTokenKind::IDENTIFIER:
+        return isTypedefName(currentToken().value);
+    default:
+        return false;
+    }
+}
+
+// 从 '(' 起扫描 `(...)` 是否后随 ';'（头文件原型形态判定，仅词法形态；
+// 括号配平扫描有 TOKEN_EOF/末尾兜底，不会越界）
+bool Parser::isPrototypeForm(std::size_t lparenPos) const {
+    int depth = 0;
+    for (std::size_t i = lparenPos; i < m_tokens.size(); ++i) {
+        const NTokenKind kind = m_tokens[i].kind;
+        if (kind == NTokenKind::DELIMITER_LPAREN) {
+            ++depth;
+            continue;
+        }
+        if (kind == NTokenKind::DELIMITER_RPAREN) {
+            --depth;
+            if (depth == 0) {
+                return i + 1 < m_tokens.size()
+                       && m_tokens[i + 1].kind == NTokenKind::DELIMITER_SEMICOLON;
+            }
+        }
+        if (kind == NTokenKind::TOKEN_EOF) {
+            break;
+        }
+    }
+    return false;
 }
 
 // struct 主体：`{ field; field; ... }`（不含结尾分号；tag 调用方已消费）
@@ -361,9 +459,21 @@ std::unique_ptr<Decl> Parser::parseTypedefDeclaration() {
     int column = currentToken().column;
     advance(); // 消费 typedef
 
+    // R9 头文件模式：限定符/修饰符（typedef unsigned int u32;）
+    std::string headerForcedBase; // 非空 = 裸修饰符即基类型（按 int 解释）
+    if (m_headerMode) {
+        const bool sawBaseModifier = skipHeaderQualifiers();
+        if (sawBaseModifier && !isTypeStart()) {
+            headerForcedBase = "int";
+        }
+    }
+
     auto decl = std::make_unique<TypedefDeclaration>("", line, column);
 
-    if (currentToken().kind == NTokenKind::KEYWORD_STRUCT) {
+    if (!headerForcedBase.empty()) {
+        // `typedef unsigned u32;` → int
+        decl->baseType = headerForcedBase;
+    } else if (currentToken().kind == NTokenKind::KEYWORD_STRUCT) {
         int structLine = currentToken().line;
         int structColumn = currentToken().column;
         decl->baseIsStruct = true;
@@ -595,44 +705,51 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     expect(NTokenKind::DELIMITER_LPAREN);
 
     if (currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
-        do {
-            // 解析参数（builtin 或 struct Tag）
-            bool paramIsStruct = false;
-            int paramLine = 0;
-            int paramColumn = 0;
-            std::string paramType =
-              parseTypePrefix(paramIsStruct, paramLine, paramColumn);
-            (void)paramLine;
-            (void)paramColumn;
-
-            // 参数指针层级：int f(int* a, char* s)
-            int paramPointerDepth = 0;
-            while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
-                ++paramPointerDepth;
-                advance();
-            }
-
-            if (currentToken().kind != NTokenKind::IDENTIFIER) {
-                error("Expected parameter name");
-            }
-
-            std::string paramName = currentToken().value;
+        // R9 头文件模式：`(void)` 空参表（C 头文件惯例，语言本体不支持）
+        if (m_headerMode && currentToken().kind == NTokenKind::KEYWORD_VOID
+            && peekToken().kind == NTokenKind::DELIMITER_RPAREN) {
             advance();
+        } else {
+            do {
+                // 解析参数（builtin 或 struct Tag）
+                bool paramIsStruct = false;
+                int paramLine = 0;
+                int paramColumn = 0;
+                std::string paramType =
+                  parseTypePrefix(paramIsStruct, paramLine, paramColumn);
+                (void)paramLine;
+                (void)paramColumn;
 
-            // 数组形参不支持：数组实参传给指针形参即完成退化（PRD R1.2）
-            if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
-                error("array parameters are not supported; declare the parameter as a "
+                // 参数指针层级：int f(int* a, char* s)
+                int paramPointerDepth = 0;
+                while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
+                    ++paramPointerDepth;
+                    advance();
+                }
+
+                if (currentToken().kind != NTokenKind::IDENTIFIER) {
+                    error("Expected parameter name");
+                }
+
+                std::string paramName = currentToken().value;
+                advance();
+
+                // 数组形参不支持：数组实参传给指针形参即完成退化（PRD R1.2）
+                if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+                    error(
+                      "array parameters are not supported; declare the parameter as a "
                       "pointer");
-            }
+                }
 
-            // 参数沿用既有约定记录函数声明位置（诊断落点与既有负例一致）
-            auto param =
-              std::make_unique<VarDeclaration>(paramType, paramName, line, column);
-            param->isStructTag = paramIsStruct;
-            param->pointerDepth = paramPointerDepth;
-            funcDecl->parameters.push_back(std::move(param));
+                // 参数沿用既有约定记录函数声明位置（诊断落点与既有负例一致）
+                auto param =
+                  std::make_unique<VarDeclaration>(paramType, paramName, line, column);
+                param->isStructTag = paramIsStruct;
+                param->pointerDepth = paramPointerDepth;
+                funcDecl->parameters.push_back(std::move(param));
 
-        } while (match(NTokenKind::DELIMITER_COMMA));
+            } while (match(NTokenKind::DELIMITER_COMMA));
+        }
     }
 
     expect(NTokenKind::DELIMITER_RPAREN);
@@ -677,43 +794,50 @@ std::unique_ptr<FuncDeclaration> Parser::parseExternDeclaration() {
     // 参数列表：与函数声明同形，尾部可带 ...（varargs）
     expect(NTokenKind::DELIMITER_LPAREN);
     if (currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
-        do {
-            if (currentToken().kind == NTokenKind::ELLIPSIS) {
-                advance();
-                funcDecl->isVariadic = true;
-                break; // ... 必须是最后一个参数
-            }
-            bool paramIsStruct = false;
-            int paramLine = 0;
-            int paramColumn = 0;
-            std::string paramType =
-              parseTypePrefix(paramIsStruct, paramLine, paramColumn);
-            (void)paramLine;
-            (void)paramColumn;
-
-            int paramPointerDepth = 0;
-            while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
-                ++paramPointerDepth;
-                advance();
-            }
-
-            if (currentToken().kind != NTokenKind::IDENTIFIER) {
-                error("Expected parameter name in 'extern' declaration");
-            }
-            std::string paramName = currentToken().value;
+        // R9 头文件模式：`(void)` 空参表
+        if (m_headerMode && currentToken().kind == NTokenKind::KEYWORD_VOID
+            && peekToken().kind == NTokenKind::DELIMITER_RPAREN) {
             advance();
+        } else {
+            do {
+                if (currentToken().kind == NTokenKind::ELLIPSIS) {
+                    advance();
+                    funcDecl->isVariadic = true;
+                    break; // ... 必须是最后一个参数
+                }
+                bool paramIsStruct = false;
+                int paramLine = 0;
+                int paramColumn = 0;
+                std::string paramType =
+                  parseTypePrefix(paramIsStruct, paramLine, paramColumn);
+                (void)paramLine;
+                (void)paramColumn;
 
-            if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
-                error("array parameters are not supported; declare the parameter as a "
+                int paramPointerDepth = 0;
+                while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
+                    ++paramPointerDepth;
+                    advance();
+                }
+
+                if (currentToken().kind != NTokenKind::IDENTIFIER) {
+                    error("Expected parameter name in 'extern' declaration");
+                }
+                std::string paramName = currentToken().value;
+                advance();
+
+                if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+                    error(
+                      "array parameters are not supported; declare the parameter as a "
                       "pointer");
-            }
+                }
 
-            auto param =
-              std::make_unique<VarDeclaration>(paramType, paramName, line, column);
-            param->isStructTag = paramIsStruct;
-            param->pointerDepth = paramPointerDepth;
-            funcDecl->parameters.push_back(std::move(param));
-        } while (match(NTokenKind::DELIMITER_COMMA));
+                auto param =
+                  std::make_unique<VarDeclaration>(paramType, paramName, line, column);
+                param->isStructTag = paramIsStruct;
+                param->pointerDepth = paramPointerDepth;
+                funcDecl->parameters.push_back(std::move(param));
+            } while (match(NTokenKind::DELIMITER_COMMA));
+        }
 
         // ... 之后只允许 ')'（命名参数不能跟在可变部分之后）
         if (funcDecl->isVariadic && currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
@@ -730,7 +854,112 @@ std::unique_ptr<FuncDeclaration> Parser::parseExternDeclaration() {
     return funcDecl;
 }
 
+// R9 头文件函数原型：`int add(int a, int b);` / `int sum(int arr[], int n);` /
+// `int f(void);` / `int printf(char* fmt, ...);`。与 extern 声明同构（无函数
+// 体）但以 isPrototype 标记：语义层可与同名定义合并（C 原型语义），未被定义
+// 的原型经既有 callx 路径解析为宿主外部符号。数组形参按 C 语义退化为指针。
+std::unique_ptr<FuncDeclaration> Parser::parsePrototypeDeclaration() {
+    bool returnIsStruct = false;
+    int line = 0;
+    int column = 0;
+    std::string returnType = parseTypePrefix(returnIsStruct, line, column);
+
+    // 返回类型指针层级：char* getenv(char* name);
+    int returnPointerDepth = 0;
+    while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
+        ++returnPointerDepth;
+        advance();
+    }
+
+    if (currentToken().kind != NTokenKind::IDENTIFIER) {
+        error("Expected function name in prototype");
+    }
+    std::string name = currentToken().value;
+    advance();
+
+    auto funcDecl = std::make_unique<FuncDeclaration>(returnType, name, line, column);
+    funcDecl->returnIsStruct = returnIsStruct;
+    funcDecl->returnPointerDepth = returnPointerDepth;
+    funcDecl->isPrototype = true;
+
+    expect(NTokenKind::DELIMITER_LPAREN);
+    if (currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
+        // `(void)` 空参表（C 头文件惯例）
+        if (currentToken().kind == NTokenKind::KEYWORD_VOID
+            && peekToken().kind == NTokenKind::DELIMITER_RPAREN) {
+            advance();
+        } else {
+            do {
+                if (currentToken().kind == NTokenKind::ELLIPSIS) {
+                    advance();
+                    funcDecl->isVariadic = true;
+                    break; // ... 必须是最后一个参数
+                }
+                bool paramIsStruct = false;
+                std::string paramType = parseTypePrefix(paramIsStruct, line, column);
+
+                int paramPointerDepth = 0;
+                while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
+                    ++paramPointerDepth;
+                    advance();
+                }
+
+                // 无名形参（`int add(int, int);`）合法，名字留空
+                std::string paramName;
+                if (currentToken().kind == NTokenKind::IDENTIFIER) {
+                    paramName = currentToken().value;
+                    advance();
+                }
+
+                // 数组形参退化（C 语义）：形参名后缀 `[...]` 折算一级指针
+                // （形参数组本就按指针传递，长度文本忽略）
+                if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+                    ++paramPointerDepth;
+                    advance();
+                    int bracketDepth = 1;
+                    while (bracketDepth > 0
+                           && currentToken().kind != NTokenKind::TOKEN_EOF) {
+                        if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+                            ++bracketDepth;
+                        } else if (currentToken().kind
+                                   == NTokenKind::DELIMITER_RBRACKET) {
+                            --bracketDepth;
+                        }
+                        advance();
+                    }
+                    if (bracketDepth != 0) {
+                        error("Expected ']' in array parameter of prototype");
+                    }
+                    if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+                        error("multidimensional array parameters are not supported");
+                    }
+                }
+
+                auto param =
+                  std::make_unique<VarDeclaration>(paramType, paramName, line, column);
+                param->isStructTag = paramIsStruct;
+                param->pointerDepth = paramPointerDepth;
+                funcDecl->parameters.push_back(std::move(param));
+            } while (match(NTokenKind::DELIMITER_COMMA));
+        }
+
+        // ... 之后只允许 ')'
+        if (funcDecl->isVariadic && currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
+            error("expected ')' after '...' in prototype");
+        }
+    }
+    expect(NTokenKind::DELIMITER_RPAREN);
+    expect(NTokenKind::DELIMITER_SEMICOLON);
+    return funcDecl;
+}
+
 std::unique_ptr<Stmt> Parser::parseStatement() {
+    // R9 头文件模式：C 限定符/修饰符开头的局部声明（const int x = 5; /
+    // unsigned i = 0;）按变量声明解析（修饰符由 parseTypePrefix 消化）
+    if (m_headerMode && currentToken().kind == NTokenKind::IDENTIFIER
+        && isHeaderQualifierWord(currentToken().value)) {
+        return parseVarDeclarationStmt();
+    }
     // typedef 别名开头的语句是局部变量声明（`MyInt x = 5;`）
     if (currentToken().kind == NTokenKind::IDENTIFIER
         && isTypedefName(currentToken().value)) {
