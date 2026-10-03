@@ -150,6 +150,10 @@ namespace ir {
                 for (const auto& decl : program.declarations) {
                     if (decl->type == ASTNodeType::FUNC_DECLARATION) {
                         const auto& func = static_cast<const FuncDeclaration&>(*decl);
+                        // extern 声明无函数体（PRD R3）：合法形态，不查 body
+                        if (func.isExtern) {
+                            continue;
+                        }
                         if (func.body == nullptr
                             || func.body->type != ASTNodeType::COMPOUND_STMT) {
                             return ca::Err("function '" + func.name
@@ -185,8 +189,38 @@ namespace ir {
                 pushScope();
                 for (const auto& decl : program.declarations) {
                     if (decl->type == ASTNodeType::FUNC_DECLARATION) {
-                        m_module.functions.push_back(
-                          lowerFunction(static_cast<const FuncDeclaration&>(*decl)));
+                        const auto& func = static_cast<const FuncDeclaration&>(*decl);
+                        // extern 声明（PRD R3）：只收集签名，不进入 functions；
+                        // 同名去重（多文件重复 extern 幂等）
+                        if (func.isExtern) {
+                            bool seen = false;
+                            for (const auto& existing : m_module.externs) {
+                                if (existing.name == func.name) {
+                                    seen = true;
+                                    break;
+                                }
+                            }
+                            if (!seen) {
+                                IrExternDecl entry;
+                                entry.name = func.name;
+                                entry.returnType =
+                                  resolveDeclType(func.returnType,
+                                                  func.returnIsStruct,
+                                                  func.returnPointerDepth,
+                                                  false,
+                                                  0);
+                                for (const auto& param : func.parameters) {
+                                    IrParam paramEntry;
+                                    paramEntry.name = param->name;
+                                    paramEntry.type = resolveVarDeclType(*param);
+                                    entry.params.push_back(std::move(paramEntry));
+                                }
+                                entry.isVariadic = func.isVariadic;
+                                m_module.externs.push_back(std::move(entry));
+                            }
+                            continue;
+                        }
+                        m_module.functions.push_back(lowerFunction(func));
                     } else if (decl->type == ASTNodeType::VAR_DECLARATION) {
                         m_module.globals.push_back(
                           lowerGlobal(static_cast<const VarDeclaration&>(*decl)));
@@ -1089,6 +1123,22 @@ namespace ir {
                 }
             }
             out << "  }\n";
+        }
+        for (const auto& ext : externs) {
+            out << "  extern " << ext.returnType.toString() << " " << ext.name << "(";
+            for (size_t i = 0; i < ext.params.size(); ++i) {
+                if (i > 0) {
+                    out << ", ";
+                }
+                out << ext.params[i].type.toString() << " " << ext.params[i].name;
+            }
+            if (ext.isVariadic) {
+                if (!ext.params.empty()) {
+                    out << ", ";
+                }
+                out << "...";
+            }
+            out << ");\n";
         }
         return out.str();
     }

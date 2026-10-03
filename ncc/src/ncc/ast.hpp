@@ -138,8 +138,10 @@ public:
     int returnPointerDepth = 0;  // 返回类型指针层级（0=值，1=指针）
     std::string name;
     std::vector<std::unique_ptr<VarDeclaration>> parameters;
-    bool isExported = false; // export 修饰的顶层函数（PRD R2a）
-    std::unique_ptr<Stmt> body;
+    bool isExported = false;    // export 修饰的顶层函数（PRD R2a）
+    bool isExtern = false;      // extern 声明（PRD R3）：无函数体，符号由宿主提供
+    bool isVariadic = false;    // 参数表带 ...（仅 extern 声明，PRD R3）
+    std::unique_ptr<Stmt> body; // extern 声明为 nullptr
 
     FuncDeclaration(const std::string& rt, const std::string& n, int l, int c)
       : Decl(ASTNodeType::FUNC_DECLARATION, l, c), returnType(rt), name(n) {}

@@ -65,6 +65,9 @@ private:
     ImportDirective parseImportDirective();
     std::unique_ptr<VarDeclaration> parseVarDeclaration();
     std::unique_ptr<FuncDeclaration> parseFuncDeclaration();
+    // extern 声明（PRD R3）：`extern int puts(char* s);`，仅限文件作用域；
+    // 函数体位置必须是 ';'，参数表尾部可带 ...
+    std::unique_ptr<FuncDeclaration> parseExternDeclaration();
     std::unique_ptr<Decl> parseTypedefDeclaration();
     std::unique_ptr<StructDeclaration>
     parseStructBody(const std::string& tag, int line, int column);

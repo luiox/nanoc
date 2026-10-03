@@ -154,6 +154,9 @@ std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported) {
         if (currentToken().kind == NTokenKind::KEYWORD_EXPORT) {
             errorAt(exportToken, "duplicate 'export'");
         }
+        if (currentToken().kind == NTokenKind::KEYWORD_EXTERN) {
+            errorAt(exportToken, "'export' cannot be applied to 'extern' declarations");
+        }
         auto decl = parseDeclaration(true);
         if (decl->type == ASTNodeType::STRUCT_DECLARATION
             || decl->type == ASTNodeType::TYPEDEF_DECLARATION) {
@@ -162,6 +165,14 @@ std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported) {
                     "variables");
         }
         return decl;
+    }
+
+    // extern 声明（PRD R3）：只出现在文件作用域，导入宿主提供的 C 函数
+    if (currentToken().kind == NTokenKind::KEYWORD_EXTERN) {
+        if (isExported) {
+            error("'export' cannot be applied to 'extern' declarations");
+        }
+        return parseExternDeclaration();
     }
 
     // typedef 只出现在文件作用域
@@ -632,6 +643,93 @@ std::unique_ptr<FuncDeclaration> Parser::parseFuncDeclaration() {
     return funcDecl;
 }
 
+// extern 声明（PRD R3）：`extern int puts(char* s);` / `extern void exit(int);` /
+// `extern int printf(char* fmt, ...);`。形态与函数声明一致但无函数体（';' 收尾），
+// 仅允许文件作用域（函数体内由 parseStatement 报错）
+std::unique_ptr<FuncDeclaration> Parser::parseExternDeclaration() {
+    const Token externToken = currentToken();
+    advance(); // 消费 extern
+
+    // 返回类型（builtin 或 struct Tag）
+    bool returnIsStruct = false;
+    int line = 0;
+    int column = 0;
+    std::string returnType = parseTypePrefix(returnIsStruct, line, column);
+
+    // 返回类型指针层级：extern char* getenv(char* name);
+    int returnPointerDepth = 0;
+    while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
+        ++returnPointerDepth;
+        advance();
+    }
+
+    if (currentToken().kind != NTokenKind::IDENTIFIER) {
+        error("Expected function name after 'extern' declaration type");
+    }
+    std::string name = currentToken().value;
+    advance();
+
+    auto funcDecl = std::make_unique<FuncDeclaration>(returnType, name, line, column);
+    funcDecl->returnIsStruct = returnIsStruct;
+    funcDecl->returnPointerDepth = returnPointerDepth;
+    funcDecl->isExtern = true;
+
+    // 参数列表：与函数声明同形，尾部可带 ...（varargs）
+    expect(NTokenKind::DELIMITER_LPAREN);
+    if (currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
+        do {
+            if (currentToken().kind == NTokenKind::ELLIPSIS) {
+                advance();
+                funcDecl->isVariadic = true;
+                break; // ... 必须是最后一个参数
+            }
+            bool paramIsStruct = false;
+            int paramLine = 0;
+            int paramColumn = 0;
+            std::string paramType =
+              parseTypePrefix(paramIsStruct, paramLine, paramColumn);
+            (void)paramLine;
+            (void)paramColumn;
+
+            int paramPointerDepth = 0;
+            while (currentToken().kind == NTokenKind::OPERATOR_MULTIPLY) {
+                ++paramPointerDepth;
+                advance();
+            }
+
+            if (currentToken().kind != NTokenKind::IDENTIFIER) {
+                error("Expected parameter name in 'extern' declaration");
+            }
+            std::string paramName = currentToken().value;
+            advance();
+
+            if (currentToken().kind == NTokenKind::DELIMITER_LBRACKET) {
+                error("array parameters are not supported; declare the parameter as a "
+                      "pointer");
+            }
+
+            auto param =
+              std::make_unique<VarDeclaration>(paramType, paramName, line, column);
+            param->isStructTag = paramIsStruct;
+            param->pointerDepth = paramPointerDepth;
+            funcDecl->parameters.push_back(std::move(param));
+        } while (match(NTokenKind::DELIMITER_COMMA));
+
+        // ... 之后只允许 ')'（命名参数不能跟在可变部分之后）
+        if (funcDecl->isVariadic && currentToken().kind != NTokenKind::DELIMITER_RPAREN) {
+            error("expected ')' after '...' in 'extern' declaration");
+        }
+    }
+    expect(NTokenKind::DELIMITER_RPAREN);
+
+    // extern 声明无函数体：';' 收尾（出现 '{' 视为把定义写在 extern 声明上）
+    if (currentToken().kind == NTokenKind::DELIMITER_LBRACE) {
+        errorAt(externToken, "'extern' declaration of '" + name + "' cannot have a body");
+    }
+    expect(NTokenKind::DELIMITER_SEMICOLON);
+    return funcDecl;
+}
+
 std::unique_ptr<Stmt> Parser::parseStatement() {
     // typedef 别名开头的语句是局部变量声明（`MyInt x = 5;`）
     if (currentToken().kind == NTokenKind::IDENTIFIER
@@ -664,6 +762,10 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         return parseVarDeclarationStmt();
     case NTokenKind::KEYWORD_TYPEDEF:
         error("typedef declarations are only allowed at file scope");
+        return nullptr;
+    case NTokenKind::KEYWORD_EXTERN:
+        // extern 声明仅限文件作用域（PRD R3）：语句位置一律报错
+        error("extern declarations are only allowed at file scope");
         return nullptr;
     default:
         return parseExprStatement();

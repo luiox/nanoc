@@ -23,6 +23,7 @@ void Lexer::initKeywords() {
     m_keywords["typedef"] = NTokenKind::KEYWORD_TYPEDEF;
     m_keywords["import"] = NTokenKind::KEYWORD_IMPORT;
     m_keywords["export"] = NTokenKind::KEYWORD_EXPORT;
+    m_keywords["extern"] = NTokenKind::KEYWORD_EXTERN;
 }
 
 char Lexer::currentChar() const {
@@ -151,8 +152,11 @@ Token Lexer::readString() {
                                      + std::to_string(startLine));
         }
         if (c == '\\' && m_pos + 1 < m_source.length()) {
+            // 反斜杠与被转义字符原样保留在 value 中（由汇编器/C 后端解码）；
+            // 先记反斜杠并前进，下一轮循环记被转义字符
             value += c;
             advance();
+            continue;
         }
         value += c;
         advance();
@@ -222,6 +226,13 @@ Token Lexer::readOperator() {
         }
         throw std::runtime_error("Expected '|' at line " + std::to_string(m_line));
     case '.':
+        // ...（extern 声明可变参数，PRD R3）；单独的 . 是成员访问。
+        // switch 前已消费第一个 '.'，此处再消费两个
+        if (currentChar() == '.' && peekChar() == '.') {
+            advance();
+            advance();
+            return Token(NTokenKind::ELLIPSIS, "...", startLine, startColumn);
+        }
         return Token(NTokenKind::OPERATOR_DOT, ".", startLine, startColumn);
     default:
         throw std::runtime_error("Unknown operator at line " + std::to_string(m_line));
