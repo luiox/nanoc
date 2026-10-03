@@ -23,6 +23,7 @@ enum class NTokenKind : int {
     KEYWORD_TYPEDEF, // typedef：类型别名（PRD R1.2 第二批）
     KEYWORD_IMPORT,  // import：模块导入（PRD R2a 多文件整体编译）
     KEYWORD_EXPORT,  // export：顶层符号导出标记（PRD R2a）
+    KEYWORD_EXTERN,  // extern：外部 C 函数声明（PRD R3）
 
     // Identifiers
     IDENTIFIER,
@@ -51,6 +52,7 @@ enum class NTokenKind : int {
     OPERATOR_AMPERSAND,     // &（取址；&& 已由 LOGICAL_AND 消化）
     OPERATOR_DOT,           // .（struct 成员访问，PRD R1.2 第二批）
     OPERATOR_ARROW,         // ->（struct 指针成员访问，PRD R1.2 第二批）
+    ELLIPSIS,               // ...（extern 声明可变参数，PRD R3）
 
     // Delimiters
     DELIMITER_SEMICOLON, // ;

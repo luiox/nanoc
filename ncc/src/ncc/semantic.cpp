@@ -92,6 +92,11 @@ SemanticAnalyzer::analyze(const Program& program) {
     for (const auto& decl : program.declarations) {
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
             const auto& func = static_cast<const FuncDeclaration&>(*decl);
+            // extern 声明无函数体（PRD R3）：body == nullptr 是合法形态；
+            // 普通函数仍要求复合语句体
+            if (func.isExtern) {
+                continue;
+            }
             if (func.body == nullptr || func.body->type != ASTNodeType::COMPOUND_STMT) {
                 return ca::Err("function '" + func.name + "' has no valid compound body");
             }
@@ -137,6 +142,10 @@ SemanticAnalyzer::analyze(const Program& program) {
             m_currentFile = decl->sourceFile;
         }
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
+            // extern 声明无函数体（PRD R3）：登记签名后跳过函数体检查
+            if (static_cast<const FuncDeclaration&>(*decl).isExtern) {
+                continue;
+            }
             checkFunctionBody(static_cast<const FuncDeclaration&>(*decl));
         } else if (decl->type == ASTNodeType::VAR_DECLARATION) {
             checkGlobalVariable(static_cast<const VarDeclaration&>(*decl));
@@ -262,6 +271,7 @@ void SemanticAnalyzer::appendGlobalSummary(const Symbol& symbol) {
     summary.column = symbol.column;
     summary.definedIn = symbol.definedIn;
     summary.isExported = symbol.isExported;
+    summary.isExtern = symbol.isExtern;
     for (const auto& paramType : symbol.paramTypes) {
         summary.paramTypes.add(typeName(paramType));
     }
@@ -449,6 +459,8 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
     symbol.column = decl.column;
     symbol.definedIn = decl.sourceFile;
     symbol.isExported = decl.isExported;
+    symbol.isExtern = decl.isExtern;
+    symbol.isVariadic = decl.isVariadic;
     for (const auto& param : decl.parameters) {
         // 参数类型的诊断在 checkFunctionBody 中统一报告，此处静默计算
         symbol.paramTypes.add(declaredType(param->type,
@@ -1225,11 +1237,14 @@ SemanticType SemanticAnalyzer::checkCall(const CallExpr& expr) {
         return SemanticType::Error;
     }
 
-    // 参数个数一致性
-    if (expr.arguments.size() != symbol->paramTypes.len()) {
+    // 参数个数：非 varargs 严格相等；varargs（PRD R3）实参数 ≥ 命名参数数
+    const bool variadic = symbol->isVariadic;
+    if (variadic ? expr.arguments.size() < symbol->paramTypes.len()
+                 : expr.arguments.size() != symbol->paramTypes.len()) {
         reportError(expr.line,
                     expr.column,
                     "function '" + expr.callee + "' expects "
+                      + (variadic ? "at least " : "")
                       + std::to_string(symbol->paramTypes.len())
                       + " argument(s), but got " + std::to_string(expr.arguments.size()));
     }
@@ -1244,6 +1259,27 @@ SemanticType SemanticAnalyzer::checkCall(const CallExpr& expr) {
                         expr.column,
                         "argument " + std::to_string(static_cast<int>(i) + 1)
                           + " of call to '" + expr.callee + "'");
+    }
+    // varargs 可变部分（命名参数之后）：不与具体形参比对，但须为标量/指针
+    // （数组退化后判断；void/struct 值报错——经宿主 ABI 无法传递）
+    for (ca::usize i = checkCount; variadic && i < expr.arguments.size(); ++i) {
+        const SemanticType argumentType = decayed(checkExpr(*expr.arguments[i]));
+        if (argumentType == SemanticType::Error) {
+            continue; // 子表达式已报错，抑制级联
+        }
+        if (argumentType.kind == SemanticType::Kind::Void) {
+            reportError(expr.line,
+                        expr.column,
+                        "void value passed as variadic argument "
+                          + std::to_string(static_cast<int>(i) + 1) + " of call to '"
+                          + expr.callee + "'");
+        } else if (argumentType.kind == SemanticType::Kind::Struct) {
+            reportError(expr.line,
+                        expr.column,
+                        "struct value passed as variadic argument "
+                          + std::to_string(static_cast<int>(i) + 1) + " of call to '"
+                          + expr.callee + "' ('" + typeName(argumentType) + "')");
+        }
     }
     return symbol->type;
 }

@@ -110,6 +110,10 @@ struct Symbol {
     // export 修饰的顶层符号（PRD R2a）：跨文件可见；未导出的顶层符号仅
     // 定义所在文件可见
     bool isExported = false;
+    // extern 声明的函数（PRD R3）：无函数体，符号由宿主 C 库提供
+    bool isExtern = false;
+    // 参数表带 ...（PRD R3，仅 extern 声明）：调用点实参数 ≥ 命名参数数即合法
+    bool isVariadic = false;
 };
 
 // 全局符号摘要（analyze 结果的一部分，供调用方与测试核对符号表内容）。
@@ -124,6 +128,7 @@ struct SymbolSummary {
     int column = 0;
     std::string definedIn;   // 定义所在文件（空 = 单文件模式）
     bool isExported = false; // export 标记（PRD R2a）
+    bool isExtern = false;   // extern 声明标记（PRD R3）
 };
 
 // 语义分析结果：全部诊断 + 全局符号表摘要
@@ -185,6 +190,14 @@ struct SemanticResult {
 // - struct 定义/typedef 只允许文件作用域；成员初始化器与嵌套初始化器不支持
 //   （逐成员扁平初始化器 { e1, e2, ... } 仅用于 struct 变量，长度须与成员数
 //   一致）。
+//
+// extern 声明（PRD R3）：
+// - `extern int puts(char* s);` 只允许文件作用域（解析器保证）；登记函数符号
+//   （isExtern 标记、无函数体），调用点按签名检查：非 varargs 实参数严格相等，
+//   varargs（...）实参数 ≥ 命名参数数，命名参数照常做类型检查，可变部分实参
+//   须为标量/指针（void/struct 值报错）。
+// - 同名冲突沿用 redefinition 规则：extern 与普通函数定义、extern 与 extern
+//   重复声明（同编译单元内）均报错；extern 声明后再出现同名函数定义同样报错。
 //
 // 诊断策略：一次 analyze 收集全部诊断而非首错即停；已报错的子表达式用
 // Error 毒类型抑制级联。
