@@ -21,6 +21,8 @@ enum class NTokenKind : int {
     KEYWORD_NULL,    // NULL：空指针常量（PRD R1.2）
     KEYWORD_STRUCT,  // struct：结构体定义/类型引用（PRD R1.2 第二批）
     KEYWORD_TYPEDEF, // typedef：类型别名（PRD R1.2 第二批）
+    KEYWORD_IMPORT,  // import：模块导入（PRD R2a 多文件整体编译）
+    KEYWORD_EXPORT,  // export：顶层符号导出标记（PRD R2a）
 
     // Identifiers
     IDENTIFIER,

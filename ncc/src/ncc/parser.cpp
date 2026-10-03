@@ -2,7 +2,8 @@
 #include <sstream>
 #include <stdexcept>
 
-Parser::Parser(const std::vector<Token>& tokens) : m_tokens(tokens), m_pos(0) {
+Parser::Parser(const std::vector<Token>& tokens, std::string fileName)
+  : m_tokens(tokens), m_pos(0), m_fileName(std::move(fileName)) {
     // 预扫描 typedef 别名（文件作用域）。语句/声明按首 token 分发，需要先于
     // 解析知道哪些标识符是类型别名。别名恒为 `typedef ... <ident> ;` 中
     // 分号前最后一个标识符；花括号内的 struct 成员名不计（按深度屏蔽），
@@ -85,26 +86,84 @@ bool Parser::expect(NTokenKind kind) {
 
 void Parser::error(const std::string& message) {
     Token token = currentToken();
-    std::ostringstream oss;
-    oss << "Parse error at line " << token.line << ", column " << token.column << ": "
-        << message;
-    throw std::runtime_error(oss.str());
+    throw ParseError(m_fileName, token.line, token.column, message);
+}
+
+void Parser::errorAt(const Token& token, const std::string& message) {
+    throw ParseError(m_fileName, token.line, token.column, message);
 }
 
 std::unique_ptr<Program> Parser::parse() {
     auto program = std::make_unique<Program>(currentToken().line, currentToken().column);
 
+    // import 只允许出现在文件顶部（PRD R2a）：一旦出现任何声明，
+    // 其后的 import 位置报错（带行号）
+    bool seenDeclaration = false;
     while (currentToken().kind != NTokenKind::TOKEN_EOF) {
+        if (currentToken().kind == NTokenKind::KEYWORD_IMPORT) {
+            if (seenDeclaration) {
+                error("import is only allowed at the top of the file, before all "
+                      "declarations");
+            }
+            program->imports.push_back(parseImportDirective());
+            continue;
+        }
         auto decl = parseDeclaration();
         if (decl) {
             program->declarations.push_back(std::move(decl));
         }
+        seenDeclaration = true;
     }
 
     return program;
 }
 
-std::unique_ptr<Decl> Parser::parseDeclaration() {
+// import 指令：`import math;`（同目录模块名）或 `import "util/helpers.nc";`
+// （显式路径，相对当前文件）
+ImportDirective Parser::parseImportDirective() {
+    ImportDirective directive;
+    directive.line = currentToken().line;
+    directive.column = currentToken().column;
+    advance(); // 消费 import
+
+    if (currentToken().kind == NTokenKind::STRING_CONSTANT) {
+        directive.target = currentToken().value;
+        directive.quoted = true;
+        advance();
+    } else if (currentToken().kind == NTokenKind::IDENTIFIER) {
+        directive.target = currentToken().value;
+        directive.quoted = false;
+        advance();
+    } else {
+        error("expected module name or quoted path after 'import'");
+    }
+
+    if (currentToken().kind != NTokenKind::DELIMITER_SEMICOLON) {
+        error("expected ';' after import");
+    }
+    advance();
+    return directive;
+}
+
+std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported) {
+    // export 前缀（PRD R2a）：递归解析声明并校验目标种类——只允许顶层
+    // 函数与全局变量；struct/typedef 不支持导出
+    if (!isExported && currentToken().kind == NTokenKind::KEYWORD_EXPORT) {
+        const Token exportToken = currentToken();
+        advance();
+        if (currentToken().kind == NTokenKind::KEYWORD_EXPORT) {
+            errorAt(exportToken, "duplicate 'export'");
+        }
+        auto decl = parseDeclaration(true);
+        if (decl->type == ASTNodeType::STRUCT_DECLARATION
+            || decl->type == ASTNodeType::TYPEDEF_DECLARATION) {
+            errorAt(exportToken,
+                    "'export' can only be applied to top-level functions and global "
+                    "variables");
+        }
+        return decl;
+    }
+
     // typedef 只出现在文件作用域
     if (currentToken().kind == NTokenKind::KEYWORD_TYPEDEF) {
         return parseTypedefDeclaration();
@@ -157,13 +216,24 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         if (currentToken().kind == NTokenKind::DELIMITER_LPAREN) {
             // 函数声明
             m_pos = startPos; // 回退
-            return parseFuncDeclaration();
+            auto funcDecl = parseFuncDeclaration();
+            if (isExported) {
+                funcDecl->isExported = true;
+            }
+            return funcDecl;
         }
         // 变量声明
         m_pos = startPos; // 回退
-        return parseVarDeclaration();
+        auto varDecl = parseVarDeclaration();
+        if (isExported) {
+            varDecl->isExported = true;
+        }
+        return varDecl;
     }
 
+    if (isExported) {
+        error("'export' must be followed by a function or global variable declaration");
+    }
     error("Expected declaration");
     return nullptr;
 }

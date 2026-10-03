@@ -1,5 +1,6 @@
 #include "ncc/codegen.hpp"
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 
 namespace {
@@ -41,7 +42,7 @@ std::string CodeGenerator::generate(Program& program) {
     m_code.clear();
     m_data.clear();
     m_labelCounter = 0;
-    m_functions.clear();
+    m_functionTable.clear();
     m_globalSymbols.clear();
     m_localSymbols.clear();
     m_globalOrder.clear();
@@ -50,10 +51,12 @@ std::string CodeGenerator::generate(Program& program) {
     m_externs.clear();
     m_externSet.clear();
     m_stringLiterals.clear();
-    m_functionReturns.clear();
     m_breakLabels.clear();
     m_continueLabels.clear();
     m_nextSlot = 0;
+    m_currentFile.clear();
+    m_modulePrefixes.clear();
+    m_usedPrefixes.clear();
     m_structs.clear();
     m_typedefs.clear();
     m_structReturnTag.clear();
@@ -90,11 +93,98 @@ const CodeGenerator::Symbol* CodeGenerator::findSymbol(const std::string& name) 
     if (local != m_localSymbols.end()) {
         return &local->second;
     }
+    // 全局变量解析与语义可见性规则一致：当前文件定义（私有键）优先，
+    // 其次展示名键（导出符号；单文件模式全部存展示名键）
+    if (!m_currentFile.empty()) {
+        auto sameFile = m_globalSymbols.find(globalKey(name, m_currentFile, false));
+        if (sameFile != m_globalSymbols.end()) {
+            return &sameFile->second;
+        }
+    }
     auto global = m_globalSymbols.find(name);
     if (global != m_globalSymbols.end()) {
         return &global->second;
     }
     return nullptr;
+}
+
+// ---- 顶层符号标号与跨文件解析（PRD R2a）----
+
+std::string CodeGenerator::globalKey(const std::string& name,
+                                     const std::string& file,
+                                     bool isExported) {
+    // 导出符号全单元唯一、单文件模式无跨文件冲突 → 展示名；未导出顶层变量
+    // 以文件限定（\x01 不会出现在源码标识符中）
+    if (file.empty() || isExported) {
+        return name;
+    }
+    return file + '\x01' + name;
+}
+
+std::string CodeGenerator::modulePrefix(const std::string& file) {
+    if (file.empty()) {
+        return "";
+    }
+    auto memo = m_modulePrefixes.find(file);
+    if (memo != m_modulePrefixes.end()) {
+        return memo->second;
+    }
+    // stem：去目录与扩展名；非字母/数字/下划线字符压成下划线
+    const size_t sep = file.find_last_of("/\\");
+    const size_t start = (sep == std::string::npos) ? 0 : sep + 1;
+    size_t end = file.size();
+    const size_t dot = file.find_last_of('.');
+    if (dot != std::string::npos && dot > start) {
+        end = dot;
+    }
+    std::string stem = file.substr(start, end - start);
+    for (char& c : stem) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
+            c = '_';
+        }
+    }
+    if (stem.empty()) {
+        stem = "m";
+    }
+    // 同 stem 的不同文件追加 _2/_3...（不同目录同名文件共存）
+    std::string candidate = stem;
+    int suffix = 2;
+    while (m_usedPrefixes.count(candidate) > 0) {
+        candidate = stem + "_" + std::to_string(suffix++);
+    }
+    m_usedPrefixes.insert(candidate);
+    m_modulePrefixes[file] = candidate;
+    return candidate;
+}
+
+std::string CodeGenerator::functionLabel(const FuncDeclaration& node) {
+    if (node.name == "main") {
+        return "main"; // VM 入口标号恒不 mangle
+    }
+    if (node.isExported || node.sourceFile.empty()) {
+        return node.name;
+    }
+    return ".f_" + modulePrefix(node.sourceFile) + "_" + node.name;
+}
+
+const CodeGenerator::FunctionEntry*
+CodeGenerator::resolveFunction(const std::string& name) const {
+    const auto it = m_functionTable.find(name);
+    if (it == m_functionTable.end() || it->second.empty()) {
+        return nullptr;
+    }
+    const std::vector<FunctionEntry>& candidates = it->second;
+    if (candidates.size() == 1) {
+        return &candidates.front();
+    }
+    // 跨文件同名候选（双方皆私有才会共存，语义已保证无导出歧义）：
+    // 当前文件定义优先
+    for (const FunctionEntry& entry : candidates) {
+        if (entry.file == m_currentFile) {
+            return &entry;
+        }
+    }
+    return &candidates.front(); // 防御：语义已拒绝的歧义形态
 }
 
 // ---- 类型解析（typedef/struct 透明展开） ----
@@ -212,18 +302,23 @@ void CodeGenerator::registerGlobal(VarDeclaration& node) {
     if (!m_registeredGlobals.insert(&node).second) {
         return; // 同一声明只登记一次
     }
-    if (m_globalSymbols.find(node.name) == m_globalSymbols.end()) {
-        m_globalOrder.push_back(node.name);
+    // 标号与存储键（PRD R2a）：导出/单文件 → ".g_" + 名字；未导出跨文件
+    // 私有符号 → ".f_<stem>_<name>"，存储键带文件限定
+    const std::string key = globalKey(node.name, node.sourceFile, node.isExported);
+    if (m_globalSymbols.find(key) == m_globalSymbols.end()) {
+        m_globalOrder.push_back(key);
     }
     Symbol symbol;
     symbol.kind = SymKind::Global;
-    symbol.label = ".g_" + node.name;
+    symbol.label = (node.isExported || node.sourceFile.empty())
+                     ? ".g_" + node.name
+                     : ".f_" + modulePrefix(node.sourceFile) + "_" + node.name;
     symbol.type = canonicalType(resolveBaseType(node.type, node.isStructTag),
                                 node.pointerDepth,
                                 node.isArray);
     symbol.isArray = node.isArray;
     symbol.arraySize = node.arraySize;
-    m_globalSymbols[node.name] = symbol;
+    m_globalSymbols[key] = symbol;
 
     if (!node.initializer) {
         return;
@@ -498,8 +593,8 @@ int CodeGenerator::structTempWords(const Expr* expr) {
     case ASTNodeType::CALL_EXPR: {
         auto& call = static_cast<const CallExpr&>(*expr);
         int words = 0;
-        auto it = m_functionReturns.find(call.callee);
-        const std::string returnType = it != m_functionReturns.end() ? it->second : "int";
+        const FunctionEntry* target = resolveFunction(call.callee);
+        const std::string returnType = target != nullptr ? target->returnType : "int";
         if (const StructLayout* layout = structLayoutOf(returnType)) {
             words += std::max(layout->sizeWords, 1);
         }
@@ -664,11 +759,15 @@ void CodeGenerator::visit(Program& node) {
     for (auto& decl : node.declarations) {
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
             auto& func = static_cast<FuncDeclaration&>(*decl);
-            m_functions.insert(func.name);
-            m_functionReturns[func.name] =
+            FunctionEntry entry;
+            entry.file = func.sourceFile;
+            entry.isExported = func.isExported;
+            entry.label = functionLabel(func);
+            entry.returnType =
               canonicalType(resolveBaseType(func.returnType, func.returnIsStruct),
                             func.returnPointerDepth,
                             false);
+            m_functionTable[func.name].push_back(std::move(entry));
         } else if (decl->type == ASTNodeType::VAR_DECLARATION) {
             registerGlobal(static_cast<VarDeclaration&>(*decl));
         }
@@ -745,14 +844,20 @@ void CodeGenerator::visit(TypedefDeclaration& node) {
 }
 
 void CodeGenerator::visit(FuncDeclaration& node) {
-    m_functions.insert(node.name);
     m_localSymbols.clear();
     m_nextSlot = 0;
+    m_currentFile = node.sourceFile;
     const bool isMain = (node.name == "main");
 
+    // 标号：main/导出函数用原名，私有函数 mangle（与第一遍登记一致）
+    const std::string label = functionLabel(node);
+
+    // 返回类型取第一遍登记（m_currentFile 已指向本函数，跨文件同名时解析
+    // 到本文件的条目）
+    const FunctionEntry* ownEntry = resolveFunction(node.name);
     const std::string returnType =
-      m_functionReturns.count(node.name) > 0
-        ? m_functionReturns.at(node.name)
+      ownEntry != nullptr
+        ? ownEntry->returnType
         : canonicalType(resolveBaseType(node.returnType, node.returnIsStruct),
                         node.returnPointerDepth,
                         false);
@@ -762,7 +867,7 @@ void CodeGenerator::visit(FuncDeclaration& node) {
 
     emit("");
     emit("; Function: " + node.name);
-    emitLabel(node.name);
+    emitLabel(functionLabel(node));
 
     // fastcall：前 4 个参数占帧槽位（入口溢出保存），第 5 个起在调用者栈上。
     // struct 形参按地址传递：槽位存调用者副本地址（type 记为 struct T*）
@@ -1140,14 +1245,14 @@ void CodeGenerator::visit(AssignExpr& node) {
 }
 
 void CodeGenerator::visit(CallExpr& node) {
-    const bool external = m_functions.find(node.callee) == m_functions.end();
+    // 被调解析：当前文件私有函数优先，其次导出函数；未命中 = 宿主外部符号
+    const FunctionEntry* target = resolveFunction(node.callee);
+    const bool external = target == nullptr;
     if (external && m_externSet.insert(node.callee).second) {
         m_externs.push_back(node.callee);
     }
 
-    auto returnIt = m_functionReturns.find(node.callee);
-    const std::string returnType =
-      returnIt != m_functionReturns.end() ? returnIt->second : "int";
+    const std::string returnType = target != nullptr ? target->returnType : "int";
     const StructLayout* returnLayout = structLayoutOf(returnType);
 
     // 参数从右向左求值：a1 最后求值留在栈顶，a5..aN 依序压在栈上；
@@ -1160,16 +1265,19 @@ void CodeGenerator::visit(CallExpr& node) {
         }
     }
 
-    // 前 4 个参数弹入 R0-R3（fastcall）
-    emit("    pop R0");
-    if (node.arguments.size() > 1) {
-        emit("    pop R1");
-    }
-    if (node.arguments.size() > 2) {
-        emit("    pop R2");
-    }
-    if (node.arguments.size() > 3) {
-        emit("    pop R3");
+    // 前 4 个参数弹入 R0-R3（fastcall）；无参调用不得动栈（修复：0 参调用
+    // 原先也会 pop R0，破坏栈底哨兵，由 R2a 多文件用例首次覆盖）
+    if (!node.arguments.empty()) {
+        emit("    pop R0");
+        if (node.arguments.size() > 1) {
+            emit("    pop R1");
+        }
+        if (node.arguments.size() > 2) {
+            emit("    pop R2");
+        }
+        if (node.arguments.size() > 3) {
+            emit("    pop R3");
+        }
     }
 
     // struct 返回（sret）：接收槽地址经 R7 传入
@@ -1183,7 +1291,7 @@ void CodeGenerator::visit(CallExpr& node) {
     if (external) {
         emit("    callx " + node.callee);
     } else {
-        emit("    call " + node.callee);
+        emit("    call " + target->label);
     }
 
     // 第 5 个参数起由调用者清栈
@@ -1560,8 +1668,9 @@ std::string CodeGenerator::exprType(const Expr& expr) const {
     case ASTNodeType::ASSIGN_EXPR:
         return exprType(*static_cast<const AssignExpr&>(expr).target);
     case ASTNodeType::CALL_EXPR: {
-        auto it = m_functionReturns.find(static_cast<const CallExpr&>(expr).callee);
-        return it != m_functionReturns.end() ? it->second : "int";
+        const FunctionEntry* target =
+          resolveFunction(static_cast<const CallExpr&>(expr).callee);
+        return target != nullptr ? target->returnType : "int";
     }
     default:
         return "<error>";

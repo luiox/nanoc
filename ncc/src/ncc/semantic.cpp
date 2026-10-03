@@ -102,13 +102,17 @@ SemanticAnalyzer::analyze(const Program& program) {
     m_scopes.clear();
     m_structs.clear();
     m_typedefs.clear();
-    m_scopes.emplace_back(); // 作用域 0：全局
+    m_globalSymbols.clear();
+    m_globalByName.clear();
+    m_currentFile.clear();
+    m_scopes.emplace_back(); // 作用域 0：全局（顶层符号另登记于 m_globalSymbols）
     m_currentFunction = nullptr;
     m_loopDepth = 0;
 
     // 第一遍之一：struct 定义/前向声明与 typedef 按声明顺序登记。类型命名空间
     // 全编译单元内可见（不强制文本先序，决策见 semantic.hpp 类注释）
     for (const auto& decl : program.declarations) {
+        m_currentFile = decl->sourceFile;
         if (decl->type == ASTNodeType::STRUCT_DECLARATION) {
             registerStructDeclaration(static_cast<const StructDeclaration&>(*decl));
         } else if (decl->type == ASTNodeType::TYPEDEF_DECLARATION) {
@@ -120,6 +124,7 @@ SemanticAnalyzer::analyze(const Program& program) {
     // 相互递归）
     for (const auto& decl : program.declarations) {
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
+            m_currentFile = decl->sourceFile;
             registerFunctionSignature(static_cast<const FuncDeclaration&>(*decl));
         }
     }
@@ -127,6 +132,10 @@ SemanticAnalyzer::analyze(const Program& program) {
     // 第二遍：按声明顺序处理——全局变量"先声明后可见"（声明顺序即可见顺序），
     // 函数体逐一检查
     for (const auto& decl : program.declarations) {
+        if (decl->type == ASTNodeType::FUNC_DECLARATION
+            || decl->type == ASTNodeType::VAR_DECLARATION) {
+            m_currentFile = decl->sourceFile;
+        }
         if (decl->type == ASTNodeType::FUNC_DECLARATION) {
             checkFunctionBody(static_cast<const FuncDeclaration&>(*decl));
         } else if (decl->type == ASTNodeType::VAR_DECLARATION) {
@@ -155,7 +164,71 @@ const Symbol* SemanticAnalyzer::lookupSymbol(const std::string& name) const {
             return function;
         }
     }
+    // 局部作用域未命中 → 顶层符号表（受跨文件可见性约束）
+    return lookupGlobal(name);
+}
+
+// ---- 顶层符号表（PRD R2a 多文件可见性）----
+
+bool SemanticAnalyzer::declareGlobal(const Symbol& symbol) {
+    std::vector<std::size_t>& slots = m_globalByName[symbol.name];
+    for (const std::size_t index : slots) {
+        const Symbol& existing = m_globalSymbols[index];
+        // 重复定义规则（决策记录）：
+        // - 同文件同名（函数/变量混用同命名空间）→ 沿用既有 redefinition 报错
+        // - main 全局唯一：跨文件多个 main 报错（VM 入口标号不参与 mangle）
+        // - 任一方导出 → 导出名全编译单元唯一，跨文件冲突报错
+        // - 双方皆私有且跨文件 → 合法（各文件各一份，codegen 标号 mangle 隔离）
+        const bool sameFile = existing.definedIn == symbol.definedIn;
+        if (sameFile || symbol.name == "main" || existing.isExported
+            || symbol.isExported) {
+            reportError(symbol.line,
+                        symbol.column,
+                        "redefinition of '" + symbol.name + "'");
+            return false;
+        }
+    }
+    slots.push_back(m_globalSymbols.size());
+    m_globalSymbols.push_back(symbol);
+    appendGlobalSummary(symbol);
+    return true;
+}
+
+const Symbol* SemanticAnalyzer::lookupGlobal(const std::string& name) const {
+    const auto it = m_globalByName.find(name);
+    if (it == m_globalByName.end()) {
+        return nullptr;
+    }
+    // 可见性解析（use 处文件 = m_currentFile）：
+    // 1. 当前文件定义（私有或导出）；2. 任意文件的导出定义。
+    // 单文件模式（definedIn 与 m_currentFile 皆为空）在 1 即命中，行为与
+    // 既有单文件语义一致
+    for (const std::size_t index : it->second) {
+        if (m_globalSymbols[index].definedIn == m_currentFile) {
+            return &m_globalSymbols[index];
+        }
+    }
+    for (const std::size_t index : it->second) {
+        if (m_globalSymbols[index].isExported) {
+            return &m_globalSymbols[index];
+        }
+    }
     return nullptr;
+}
+
+std::string SemanticAnalyzer::hiddenGlobalHint(const std::string& name) const {
+    const auto it = m_globalByName.find(name);
+    if (it == m_globalByName.end()) {
+        return "";
+    }
+    for (const std::size_t index : it->second) {
+        const Symbol& symbol = m_globalSymbols[index];
+        if (!symbol.definedIn.empty()) {
+            return "'" + name + "' is defined in '" + symbol.definedIn
+                   + "' but not exported";
+        }
+    }
+    return "";
 }
 
 bool SemanticAnalyzer::declareVariable(const Symbol& symbol) {
@@ -187,6 +260,8 @@ void SemanticAnalyzer::appendGlobalSummary(const Symbol& symbol) {
     summary.type = typeName(symbol.type);
     summary.line = symbol.line;
     summary.column = symbol.column;
+    summary.definedIn = symbol.definedIn;
+    summary.isExported = symbol.isExported;
     for (const auto& paramType : symbol.paramTypes) {
         summary.paramTypes.add(typeName(paramType));
     }
@@ -372,6 +447,8 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
     symbol.type = std::move(returnType);
     symbol.line = decl.line;
     symbol.column = decl.column;
+    symbol.definedIn = decl.sourceFile;
+    symbol.isExported = decl.isExported;
     for (const auto& param : decl.parameters) {
         // 参数类型的诊断在 checkFunctionBody 中统一报告，此处静默计算
         symbol.paramTypes.add(declaredType(param->type,
@@ -384,9 +461,7 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
                                            param->column,
                                            false));
     }
-    if (declareFunction(symbol)) {
-        appendGlobalSummary(symbol);
-    }
+    declareGlobal(symbol);
 }
 
 void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
@@ -427,9 +502,9 @@ void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
     symbol.type = declared;
     symbol.line = decl.line;
     symbol.column = decl.column;
-    if (declareVariable(symbol)) {
-        appendGlobalSummary(symbol);
-    }
+    symbol.definedIn = decl.sourceFile;
+    symbol.isExported = decl.isExported;
+    declareGlobal(symbol);
     if (decl.initializer) {
         checkInitializer(*decl.initializer, declared, decl.name, decl.line, decl.column);
     }
@@ -718,9 +793,11 @@ SemanticType SemanticAnalyzer::checkExpr(const Expr& expr) {
 SemanticType SemanticAnalyzer::checkIdentifier(const IdentifierExpr& expr) {
     const Symbol* symbol = lookupSymbol(expr.name);
     if (symbol == nullptr) {
+        const std::string hint = hiddenGlobalHint(expr.name);
         reportError(expr.line,
                     expr.column,
-                    "use of undeclared identifier '" + expr.name + "'");
+                    hint.empty() ? "use of undeclared identifier '" + expr.name + "'"
+                                 : hint);
         return SemanticType::Error;
     }
     if (symbol->kind == SymbolKind::Function) {
@@ -745,9 +822,11 @@ SemanticType SemanticAnalyzer::checkAssign(const AssignExpr& expr) {
         context = "assignment to '" + ident.name + "'";
         const Symbol* symbol = lookupSymbol(ident.name);
         if (symbol == nullptr) {
+            const std::string hint = hiddenGlobalHint(ident.name);
             reportError(ident.line,
                         ident.column,
-                        "use of undeclared identifier '" + ident.name + "'");
+                        hint.empty() ? "use of undeclared identifier '" + ident.name + "'"
+                                     : hint);
             break;
         }
         if (symbol->kind == SymbolKind::Function) {
@@ -1127,9 +1206,11 @@ void SemanticAnalyzer::checkInitializer(const Expr& initializer,
 SemanticType SemanticAnalyzer::checkCall(const CallExpr& expr) {
     const Symbol* symbol = lookupSymbol(expr.callee);
     if (symbol == nullptr) {
+        const std::string hint = hiddenGlobalHint(expr.callee);
         reportError(expr.line,
                     expr.column,
-                    "call to undeclared function '" + expr.callee + "'");
+                    hint.empty() ? "call to undeclared function '" + expr.callee + "'"
+                                 : hint);
         // 仍检查实参表达式本身，收集其中可能存在的错误
         for (const auto& argument : expr.arguments) {
             checkExpr(*argument);

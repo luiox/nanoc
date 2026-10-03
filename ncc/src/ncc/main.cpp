@@ -1,5 +1,6 @@
 #include "ncc/codegen.hpp"
 #include "ncc/lexer.hpp"
+#include "ncc/loader.hpp"
 #include "ncc/parser.hpp"
 #include "ncc/semantic.hpp"
 #include <algorithm>
@@ -7,7 +8,6 @@
 #include <iostream>
 #include <libca/opt/opt.hpp>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -79,21 +79,6 @@ namespace {
         return path + ext;
     }
 
-    bool read_sources(const std::vector<std::string>& paths, std::string& source) {
-        for (const std::string& path : paths) {
-            std::ifstream in(path, std::ios::binary);
-            if (!in) {
-                std::cerr << "ncc: error: cannot open input file '" << path << "'\n";
-                return false;
-            }
-            std::ostringstream buf;
-            buf << in.rdbuf();
-            source += buf.str();
-            source += '\n';
-        }
-        return true;
-    }
-
     bool write_file(const std::string& path, const std::string& content) {
         std::ofstream out(path, std::ios::binary);
         if (!out) {
@@ -159,22 +144,24 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string source;
-    if (!read_sources(inputs, source)) {
+    // 多文件装载（PRD R2a 文件即模块）：每个输入都是一个装载根（import
+    // 依赖递归并入，跨根重复 import 幂等），合并为一个编译单元。
+    // 装载诊断（找不到文件/环形 import/解析错误）与语义诊断同格式输出
+    Loader loader(inputs);
+    LoadResult loaded = loader.load();
+    for (const auto& diagnostic : loaded.diagnostics) {
+        print_text(std::cerr, diagnostic.toString());
+    }
+    if (!loaded.ok) {
         return 1;
     }
 
     std::string assembly;
     try {
-        Lexer lexer(source);
-        const std::vector<Token> tokens = lexer.tokenize();
-        Parser program_parser(tokens);
-        std::unique_ptr<Program> program = program_parser.parse();
-
-        // 语义分析（PRD R1.1/R1.2）：先收集全部诊断，有 error 则输出并退出非 0，
-        // 无诊断才进入代码生成
+        // 语义分析（PRD R1.1/R1.2 + R2a 可见性）：先收集全部诊断，有 error
+        // 则输出并退出非 0，无诊断才进入代码生成
         SemanticAnalyzer analyzer(inputs.front());
-        auto analyzed = analyzer.analyze(*program);
+        auto analyzed = analyzer.analyze(*loaded.program);
         if (analyzed.is_err()) {
             std::cerr << "ncc: error: " << analyzed.unwrap_err() << "\n";
             return 1;
@@ -191,7 +178,7 @@ int main(int argc, char* argv[]) {
         }
 
         CodeGenerator codegen;
-        assembly = codegen.generate(*program);
+        assembly = codegen.generate(*loaded.program);
     } catch (const std::exception& e) {
         std::cerr << "ncc: error: " << e.what() << "\n";
         return 1;
@@ -210,7 +197,8 @@ int main(int argc, char* argv[]) {
         if (dep_path.empty()) {
             dep_path = replace_extension(out_path, ".d");
         }
-        if (!write_file(dep_path, make_depfile(out_path, inputs))) {
+        // 依赖文件包含全部 import 闭包（装载顺序），增量构建据此追踪
+        if (!write_file(dep_path, make_depfile(out_path, loaded.loadOrder))) {
             return 1;
         }
     }
