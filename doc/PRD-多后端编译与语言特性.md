@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已确认（两轮评审）；2026-10-03 终轮对账：M0–M5、M7 已交付，M6（coro）进行中 |
+| 状态 | 已确认（两轮评审）；2026-10-03 终轮对账：M0–M7 全部交付 |
 | 日期 | 2026-09-28 |
 | 范围 | R0–R14 共 15 项需求，8 个里程碑 |
 | 配套 | `doc/开发计划 NCIv2.1.md`（部分被本文取代，见附录 A）、`doc/Bytecode Format Specification v2.1.md`（继续有效） |
@@ -52,7 +52,7 @@ NanoC 是一个教学向 C 子集语言，现有链路为「ncc → .nas 汇编�
 | S10 | 文档三份互不一致 | 需求设计文档说"27 条+trap 系统调用"；开发计划说"~50 条无 syscall"；Bytecode 规范 v2.1 为准则 | 参照系混乱 | ✅ PR #36：v2.1 术语/表布局对齐；本轮：PRD/开发计划/README/AGENTS 全面进度对账 |
 | S11 | 本机无 LLVM | `clang/llc/llvm-config` 均未安装；有 MSVC 2022 + cmake 4.3.3 | LLVM 后端需先解决环境 | ✅ PR #55：官方预编译包安装；后端交付（`ir::Module` → .ll，`NANOC_LLVM_DIR`/PATH llc 探测，CI 经 Chocolatey 装 LLVM） |
 
-**结论（2026-09-28 原判定，已兑现）：M0 先修链路（S1–S5、S9），再谈新后端与新特性——M0–M5、M7 已全部交付，M6 进行中。**
+**结论（2026-09-28 原判定，已兑现）：M0 先修链路（S1–S5、S9），再谈新后端与新特性——M0–M7 已全部交付。**
 
 ---
 
@@ -118,7 +118,7 @@ IR（R1，带类型、可 dump 文本）
 | R8 | xmake 完整 `toolchain("nanoc")` | P1 | R6, R7 | M4 | ✅ #56（`toolchain("nanoc")` + `ncc-separate` 独立编译驱动 + toolchain_project 样例 + `doc/xmake-toolchain.md`） |
 | R10 | defer | P1 | R1 | M5 | ✅ #57（词法/语法/语义检查 + IR 层展开，三后端免费获得） |
 | R11 | 模式匹配 match | P1 | R1 | M5 | ✅ #57（常量/区间/多值/守卫/通配五类模式，IR 降解为比较+跳转链） |
-| R12 | 协程 coro/yield（状态机） | P1 | R10 | M6 | ⏳ 进行中（M6 开发中，R10 defer 展开基建已就绪） |
+| R12 | 协程 coro/yield（状态机） | P1 | R10 | M6 | ✅ #61（IR 层状态机变换，三后端一致；yield×defer 互斥编译错误；4 例差分/e2e 迭代器与双协程交错） |
 | R9 | include C 头文件（声明子集） | P1 | R1（可与 M5/M6 并行） | M7 | ✅ #58（预处理 + 头文件声明子集解析 + 语义原型合并，三后端可用） |
 | R13 | 三后端差分测试框架 | P0 | R4, R6 | M4（起） | ✅ #50 框架 + #55 llvm 列：13 程序 × vm/c/llvm 三列（后端可用性动态探测、skip 策略、锚点断言）；defer/match 差分行复用 harness（#57） |
 
@@ -331,10 +331,10 @@ M0 存量修复与端到端（R0, R14）
 | M3 | `ncc --emit=exe` 产出原生 exe；三后端结果一致 | ✅ 已完成（#55：LLVM 后端 + CLI 接线；差分矩阵 llvm 列三后端一致） |
 | M4 | 独立编译+增量；`set_toolchains("nanoc")` 可用；差分矩阵跑绿 | ✅ 已完成（#40 `nas -r` + #54 独立编译/链接 e2e + #56 toolchain + #50/#55 差分矩阵 vm/c/llvm） |
 | M5 | defer/match 特性用例三后端一致 | ✅ 已完成（#57：语义/IR/VM/三后端差分 28 项） |
-| M6 | 协程迭代器示例三后端一致 | ⏳ 进行中（开发分支进行中） |
+| M6 | 协程迭代器示例三后端一致 | ✅ 已完成（#61：`transformCoroutines` IR 变换 + `examples/coro_iterator.nc`，vm/c/llvm 三列一致） |
 | M7 | `#include "x.h"` 声明子集可用 | ✅ 已完成（#58：预处理 + 声明子集 + 语义原型合并） |
 
-> 当前测试基线：**465 项全绿**（48 个测试套件，含差分矩阵 vm/c/llvm 三列）。
+> 当前测试基线：**500 项全绿**（54 个测试套件，含差分矩阵 vm/c/llvm 三列）。
 
 ---
 

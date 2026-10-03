@@ -280,6 +280,7 @@ NanoC/
 │   ├── test_llvm_backend.cpp    # LLVM 后端黄金片段与真编译差分
 │   ├── test_extern.cpp / test_multifile.cpp      # extern 声明（含 msvcrt 真宿主 e2e）/ 多文件
 │   ├── test_defer_match.cpp     # M5 defer/match（语义/IR/VM/三后端差分）
+│   ├── test_coro.cpp            # M6 协程 coro/yield（语义/IR 变换/e2e/三后端差分）
 │   ├── test_include_headers.cpp # M7 #include 头文件（正例/负例/语义/e2e 差分）
 │   ├── test_separate.cpp        # R7 独立编译 loadStandalone
 │   ├── test_vm.cpp              # VM 执行级用例
@@ -292,7 +293,7 @@ NanoC/
 │   ├── test_integration_e2e.cpp # 汇编→加载→宿主调用全链路 e2e
 │   ├── test_diff_matrix.cpp     # R13 差分矩阵（程序 × vm/c/llvm 后端）
 │   └── test_libca.cpp           # libca smoke test
-├── examples/      # Sample .nc programs（hello_project/ rule 样例、toolchain_project/ toolchain 样例）
+├── examples/      # Sample .nc programs（含 coro_iterator.nc；hello_project/ rule 样例、toolchain_project/ toolchain 样例）
 ├── test/          # Legacy test files (.nas, .nca)
 ├── doc/           # 设计文档与规范（NCI v2.1 权威规范、PRD 多后端路线图、xmake rule/toolchain 指南、开发计划）
 ├── .github/workflows/ci.yml  # CI：windows-latest + xmake 构建 + 全量测试（含 LLVM 工具链安装与 llvm 差分列）

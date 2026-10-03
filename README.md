@@ -187,7 +187,7 @@ doc/             设计文档与规范
 ## 差分测试
 
 `tests/test_diff_matrix.cpp`（PRD R13）把差分断言收敛为可扩展矩阵：
-**13 个程序（examples 5 例 + 8 个特性用例）× 可用后端（vm/c/llvm）**，断言同一程序在
+**15 个程序（examples 6 例 + 9 个特性用例）× 可用后端（vm/c/llvm）**，断言同一程序在
 各后端的可观测退出码一致，并以已知 R0 锚点防止"一致地错"。后端可用性动态探测：
 无 C 编译器（探针 `NANOC_C_COMPILER` > PATH clang > gcc）或无 LLVM 工具链
 （`NANOC_LLVM_DIR` > PATH llc）时对应列记 SKIP 而非失败。defer/match 特性的
@@ -215,7 +215,7 @@ doc/             设计文档与规范
 - ✅ LLVM 后端 `--emit=llvm|obj|exe`（三后端差分矩阵 vm/c/llvm）
 - ✅ 独立编译 + 链接：`nas -r`、ncc `loadStandalone`、`ncc-separate` 驱动
 - ✅ xmake 两种接入：`rule("nanoc")`（hello_project）+ `toolchain("nanoc")`（toolchain_project）
-- ✅ 语言特性：`defer`（作用域退出逆序执行）、`match`（常量/区间/多值/守卫/通配）
+- ✅ 语言特性：`defer`（作用域退出逆序执行）、`match`（常量/区间/多值/守卫/通配）、`coro/yield`（无栈协程，IR 状态机变换，三后端一致）
 - ✅ `#include` C 头文件声明子集（guard/对象宏/原型/struct/typedef/修饰符）
-- ✅ 测试 465 项全绿（含黄金 e2e、链接器、宿主库、三后端差分矩阵）；GitHub Actions CI（windows-latest + LLVM 差分列）
-- ⏳ M6 协程 coro/yield（PRD R12）开发中
+- ✅ M6 协程 coro/yield（PRD R12）：IR 状态机变换，`examples/coro_iterator.nc` 三后端一致
+- ✅ 测试 500 项全绿（含黄金 e2e、链接器、宿主库、协程、三后端差分矩阵）；GitHub Actions CI（windows-latest + LLVM 差分列）
