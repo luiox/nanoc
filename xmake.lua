@@ -51,6 +51,7 @@ target("tests")
     add_files("ncc/src/ncc/parser.cpp")
     add_files("ncc/src/ncc/codegen.cpp")
     add_files("ncc/src/ncc/ast.cpp")
+    add_files("ncc/src/ncc/semantic.cpp")
     add_packages("gtest", "spdlog", "libca")
 
 -- 编译示例程序
