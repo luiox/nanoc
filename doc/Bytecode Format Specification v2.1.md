@@ -64,6 +64,17 @@ header(32B) | code(codeSize) | data(dataSize) | import table | export table
 
 **动态链接约定**：导入 entry `addr = 0` 表示符号地址由加载期解析（按符号名注册或经 `GetProcAddress`/`dlsym` 解析）。参考实现从 `0x7F000000`（`HOST_ADDRESS_BASE`）起为动态符号分配宿主地址并回填，宿主地址空间与代码/数据地址空间隔离。
 
+### 2.2 链接语义（nas -r）
+
+多个 .nci 目标文件按命令行顺序链接为一个可执行文件（`nas -r a.nci b.nci -o out.nci`）：
+
+- **段合并**：code/data 顺序拼接。统一编址下模块 i 的代码基址 = Σ前面 codeSize，数据基址 = Σ前面 (codeSize+dataSize)。
+- **重定位**：按 §3.1 指令长度表线性解码 code 段，地址类指令 imm 做范围判断——`< 模块 codeSize` → 代码地址（+代码基址）；`∈ [codeSize, codeSize+dataSize)` → 数据地址（+数据基址）；`≥ codeSize+dataSize` → 宿主地址（不动）。CALLX 不做范围平移（见下）。数据段不做扫描重定位（无逐字重定位信息，`dd` 地址常量链接后失效；跨模块数据引用走"导出数据标号 + 导入解析"路径）。
+- **符号解析**：导入 `addr = 0`（动态）且名字命中任一模块导出 → 内部解析：该模块内 imm 与导入 addr 相等的 CALLX/LEA/LOADA/STOREA/ST 站点改写为平移后目标地址，导入从输出表移除；显式静态宿主绑定（addr≠0）不改写。同一模块多个 addr=0 导入中存在可内部解析者时站点无法按值消歧 → 报错。未解析导入按名去重合并（调用约定冲突报错），addr 原样保留；导出地址平移后合并（重名报错）。
+- **entryPoint**：任一模块导出 `main` → 用之；否则第一个导出符号；否则 0。
+
+**CALLX 双语义**：链接后 `0 < addr < codeSize` 的 CALLX 按内部 CALL 处理（压返回地址、跳转）；否则查宿主函数表（地址 0 保留给未解析动态导入的宿主路径，宿主地址不得落入 `[0, codeSize)`）。
+
 ---
 
 ## 3. 指令集（精简版）
@@ -140,7 +151,7 @@ header(32B) | code(codeSize) | data(dataSize) | import table | export table
 | 码值 | 指令 | 格式 | 长度 | 描述 |
 |------|------|------|------|------|
 | 0x60 | CALL | ADDR32 | 5 | 内部调用 |
-| 0x61 | CALLX | IMM32 | 5 | 外部调用 |
+| 0x61 | CALLX | IMM32 | 5 | 外部调用；链接后内部地址（0<addr<codeSize）按 CALL 处理 |
 | 0x62 | RET | - | 1 | 返回 |
 
 #### 寄存器操作（0x70-0x7F）
@@ -264,6 +275,7 @@ factorial:
 - [x] VM 加载：v2.1 文件头/导入导出表/数据段/宿主分发/动态链接（PR #33）
 - [x] NAS：`.calling_convention`, `extern`, `export`，数据段与完整 v2.1 目标文件（PR #34）
 - [x] 集成验收：汇编 → 加载 → 宿主调用 e2e（PR #35）
+- [x] VM 链接器：`nas -r` 段合并/重定位/符号解析 + CALLX 双语义（PR R7）
 - [ ] 测试：C 标准库互操作（printf, malloc, exit 经宿主函数）
 
 ---
