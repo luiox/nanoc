@@ -12,6 +12,59 @@ static bool isConditionType(const SemanticType& type) {
            || type.kind == SemanticType::Kind::Null;
 }
 
+// 子树是否含 match 表达式（PRD R11）：match 降解为 If 链，只能在函数体内
+// 的语句位置出现；用于拒绝全局初始化器中的 match
+static bool containsMatchExpr(const Expr& expr) {
+    if (expr.type == ASTNodeType::MATCH_EXPR) {
+        return true;
+    }
+    switch (expr.type) {
+    case ASTNodeType::BINARY_EXPR: {
+        const auto& binary = static_cast<const BinaryExpr&>(expr);
+        return (binary.left != nullptr && containsMatchExpr(*binary.left))
+               || (binary.right != nullptr && containsMatchExpr(*binary.right));
+    }
+    case ASTNodeType::UNARY_EXPR: {
+        const auto& unary = static_cast<const UnaryExpr&>(expr);
+        return unary.operand != nullptr && containsMatchExpr(*unary.operand);
+    }
+    case ASTNodeType::ASSIGN_EXPR: {
+        const auto& assign = static_cast<const AssignExpr&>(expr);
+        return (assign.target != nullptr && containsMatchExpr(*assign.target))
+               || (assign.value != nullptr && containsMatchExpr(*assign.value));
+    }
+    case ASTNodeType::CALL_EXPR: {
+        const auto& call = static_cast<const CallExpr&>(expr);
+        for (const auto& argument : call.arguments) {
+            if (argument != nullptr && containsMatchExpr(*argument)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    case ASTNodeType::INDEX_EXPR: {
+        const auto& index = static_cast<const IndexExpr&>(expr);
+        return (index.base != nullptr && containsMatchExpr(*index.base))
+               || (index.index != nullptr && containsMatchExpr(*index.index));
+    }
+    case ASTNodeType::MEMBER_EXPR: {
+        const auto& member = static_cast<const MemberExpr&>(expr);
+        return member.base != nullptr && containsMatchExpr(*member.base);
+    }
+    case ASTNodeType::INIT_LIST_EXPR: {
+        const auto& init = static_cast<const InitListExpr&>(expr);
+        for (const auto& value : init.values) {
+            if (value != nullptr && containsMatchExpr(*value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 语义类型（R1.2 第二批：递归值类型）
 // ---------------------------------------------------------------------------
@@ -81,7 +134,8 @@ ca::usize SemanticResult::errorCount() const {
 // ---------------------------------------------------------------------------
 
 SemanticAnalyzer::SemanticAnalyzer(std::string fileName)
-  : m_fileName(std::move(fileName)), m_currentFunction(nullptr), m_loopDepth(0) {}
+  : m_fileName(std::move(fileName)), m_currentFunction(nullptr), m_loopDepth(0),
+    m_deferDepth(0) {}
 
 ca::Result<SemanticResult, std::string>
 SemanticAnalyzer::analyze(const Program& program) {
@@ -113,6 +167,7 @@ SemanticAnalyzer::analyze(const Program& program) {
     m_scopes.emplace_back(); // 作用域 0：全局（顶层符号另登记于 m_globalSymbols）
     m_currentFunction = nullptr;
     m_loopDepth = 0;
+    m_deferDepth = 0;
 
     // 第一遍之一：struct 定义/前向声明与 typedef 按声明顺序登记。类型命名空间
     // 全编译单元内可见（不强制文本先序，决策见 semantic.hpp 类注释）
@@ -540,6 +595,14 @@ void SemanticAnalyzer::registerFunctionSignature(const FuncDeclaration& decl) {
 }
 
 void SemanticAnalyzer::checkGlobalVariable(const VarDeclaration& decl) {
+    // match 是语句化表达式（lower 层降解为 If 链），只能出现在函数体内的
+    // 语句位置；全局初始化器没有语句边界，显式拒绝（含嵌套子表达式）
+    if (decl.initializer != nullptr && containsMatchExpr(*decl.initializer)) {
+        reportError(decl.line,
+                    decl.column,
+                    "match expression is not allowed in the initializer of '" + decl.name
+                      + "' (function scope only)");
+    }
     SemanticType declared = declaredType(decl.type,
                                          decl.isStructTag,
                                          decl.pointerDepth,
@@ -725,6 +788,10 @@ void SemanticAnalyzer::checkStmt(const Stmt& stmt) {
         // 语句列表里的声明只会是 StmtVarDeclaration（解析器约定）
         checkLocalVariable(static_cast<const StmtVarDeclaration&>(stmt));
         break;
+    case ASTNodeType::DEFER_STMT:
+        // defer 语句（PRD R10；追加在既有语句分发链之后）
+        checkDefer(static_cast<const DeferStmt&>(stmt));
+        break;
     default:
         break;
     }
@@ -784,6 +851,15 @@ void SemanticAnalyzer::checkFor(const ForStmt& stmt) {
 }
 
 void SemanticAnalyzer::checkReturn(const ReturnStmt& stmt) {
+    // PRD R10 硬规格：defer 体内再 return → 编译错误（defer 在作用域退出时
+    // 执行，其中 return 无可行目标作用域）
+    if (m_deferDepth > 0) {
+        reportError(stmt.line, stmt.column, "'return' cannot appear inside a defer body");
+        if (stmt.value != nullptr) {
+            checkExpr(*stmt.value); // 仍检查值表达式，尽量多收集错误
+        }
+        return;
+    }
     // 解析器保证 return 只出现在函数体内；防御式判空
     if (m_currentFunction == nullptr) {
         return;
@@ -823,15 +899,133 @@ void SemanticAnalyzer::checkReturn(const ReturnStmt& stmt) {
 }
 
 void SemanticAnalyzer::checkBreak(const BreakStmt& stmt) {
+    // defer 体在作用域退出时执行，不在任何循环体内（PRD R10 限制的对称延伸）
+    if (m_deferDepth > 0) {
+        reportError(stmt.line, stmt.column, "'break' cannot appear inside a defer body");
+        return;
+    }
     if (m_loopDepth == 0) {
         reportError(stmt.line, stmt.column, "'break' outside of a loop");
     }
 }
 
 void SemanticAnalyzer::checkContinue(const ContinueStmt& stmt) {
+    if (m_deferDepth > 0) {
+        reportError(stmt.line,
+                    stmt.column,
+                    "'continue' cannot appear inside a defer body");
+        return;
+    }
     if (m_loopDepth == 0) {
         reportError(stmt.line, stmt.column, "'continue' outside of a loop");
     }
+}
+
+// ---- defer / match（PRD R10/R11；追加在既有检查函数之后） ----
+
+void SemanticAnalyzer::checkDefer(const DeferStmt& stmt) {
+    // defer 内再 defer → 编译错误（任务规格；PRD R10 限制的闭合）
+    if (m_deferDepth > 0) {
+        reportError(stmt.line, stmt.column, "'defer' cannot appear inside a defer body");
+        return;
+    }
+    // body 限定为表达式语句：注册时求值语义（PRD 硬规格）只对表达式形态
+    // 良定义（值捕获）；块/控制流语句无注册时求值含义，显式拒绝而非误译
+    if (stmt.body == nullptr || stmt.body->type != ASTNodeType::EXPR_STMT) {
+        reportError(stmt.line,
+                    stmt.column,
+                    "'defer' body must be an expression statement");
+        return;
+    }
+    const auto& exprStmt = static_cast<const ExprStmt&>(*stmt.body);
+    if (exprStmt.expression == nullptr) {
+        return; // 解析器产出契约保证非空；防御式返回
+    }
+    m_deferDepth++;
+    checkExpr(*exprStmt.expression);
+    m_deferDepth--;
+}
+
+SemanticType SemanticAnalyzer::checkMatch(const MatchExpr& expr) {
+    // 主体：仅 int/char（字符串/指针/struct 值 → 错误，PRD R11）
+    SemanticType subject = decayed(checkExpr(*expr.subject));
+    if (subject != SemanticType::Error && !isScalar(subject)) {
+        reportError(expr.subject->line,
+                    expr.subject->column,
+                    "match subject must be int or char, not '" + typeName(subject) + "'");
+        subject = SemanticType::Error;
+    }
+
+    bool hasWildcard = false;
+    for (const auto& arm : expr.arms) {
+        if (arm == nullptr) {
+            continue;
+        }
+        if (hasWildcard) {
+            // 通配之后的分支永不可达（按序求值决策的自然推论）
+            reportWarning(arm->line, arm->column, "unreachable match arm after wildcard");
+        }
+
+        // 守卫绑定作用域 = 所在分支（PRD R11）：分支内可遮蔽外层同名变量
+        pushScope();
+        for (const auto& pattern : arm->patterns) {
+            if (pattern == nullptr) {
+                continue;
+            }
+            if (pattern->kind == MatchPattern::Kind::Wildcard) {
+                hasWildcard = true;
+                continue;
+            }
+            if (pattern->kind == MatchPattern::Kind::Range) {
+                // 区间含端点（决策记录：闭区间）；空区间报错
+                if (pattern->lo > pattern->hi) {
+                    reportError(pattern->line,
+                                pattern->column,
+                                "invalid range pattern '" + std::to_string(pattern->lo)
+                                  + ".." + std::to_string(pattern->hi)
+                                  + "': lower bound exceeds upper bound");
+                }
+                continue;
+            }
+            if (pattern->kind == MatchPattern::Kind::Guard) {
+                Symbol binding;
+                binding.kind = SymbolKind::Variable;
+                binding.name = pattern->binding;
+                binding.type = subject; // 绑定类型 = 主体类型（char/int）
+                binding.line = pattern->line;
+                binding.column = pattern->column;
+                declareVariable(binding);
+                if (pattern->guard != nullptr) {
+                    checkCondition(*pattern->guard);
+                }
+            }
+        }
+
+        // 分支体：表达式形态须为 int/char（块形态值为 0，无类型约束）
+        if (arm->exprBody != nullptr) {
+            SemanticType bodyType = checkExpr(*arm->exprBody);
+            if (bodyType != SemanticType::Error && !isScalar(bodyType)) {
+                reportError(arm->exprBody->line,
+                            arm->exprBody->column,
+                            "match arm value must be int or char, not '"
+                              + typeName(bodyType) + "'");
+            }
+        }
+        if (arm->blockBody != nullptr) {
+            checkStmt(*arm->blockBody);
+        }
+        popScope();
+    }
+
+    // 未穷尽检查（PRD R11：无 `_` → 警告而非错误；守卫不视作穷尽——条件动态）
+    if (!hasWildcard) {
+        reportWarning(expr.line,
+                      expr.column,
+                      "match has no wildcard ('_') arm; unmatched values produce 0");
+    }
+
+    // match 表达式结果类型恒为 int（char 分支值提升；块分支值为 0）
+    return SemanticType::Int;
 }
 
 // ---- 表达式检查 ----
@@ -860,6 +1054,9 @@ SemanticType SemanticAnalyzer::checkExpr(const Expr& expr) {
         return SemanticType::CharPtr; // 字符串字面量：数据段常量的地址
     case ASTNodeType::NULL_LITERAL:
         return SemanticType::Null;
+    case ASTNodeType::MATCH_EXPR:
+        // match 表达式（PRD R11；追加在既有表达式分发链之后）
+        return checkMatch(static_cast<const MatchExpr&>(expr));
     default:
         return SemanticType::Error; // 不可达：表达式节点类型已穷举
     }
@@ -1442,6 +1639,16 @@ void SemanticAnalyzer::reportError(int line, int column, const std::string& mess
     diagnostic.line = line;
     diagnostic.column = column;
     diagnostic.severity = DiagnosticSeverity::Error;
+    diagnostic.message = message;
+    m_result.diagnostics.add(std::move(diagnostic));
+}
+
+void SemanticAnalyzer::reportWarning(int line, int column, const std::string& message) {
+    Diagnostic diagnostic;
+    diagnostic.file = m_fileName;
+    diagnostic.line = line;
+    diagnostic.column = column;
+    diagnostic.severity = DiagnosticSeverity::Warning;
     diagnostic.message = message;
     m_result.diagnostics.add(std::move(diagnostic));
 }

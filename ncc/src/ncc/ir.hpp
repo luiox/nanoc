@@ -24,17 +24,20 @@
 // 仅当 AST 违反解析器产出契约（结构缺失）时按 ca::Result 返回 Err（与
 // SemanticAnalyzer::analyze 的契约校验同策略）。
 //
-// R10-R12 预留挂接点（本期不做变换，仅语句枚举留位）：
-// - R10 defer：新增 IrDeferStmt（注册）与作用域退出序列。展开点在 lower：
-//   IrBlockStmt/Return/Break/Continue 的所有退出路径尾部逆序插入已注册
-//   defer 语句（"IR 层展开，三后端免费获得"，见 PRD R10）。defer 内 return
-//   的拒绝语义留在语义层。
-// - R11 match：新增 IrMatchStmt。lower 降解为比较+跳转链（If 链）；密集值
-//   的跳转表生成属后端优化，不在降解层做（PRD R11）。
-// - R12 coro/yield：新增 IrYieldStmt，IrFunction 增加 coro 标志。状态机变换
-//   在 IR 层完成：局部变量提升到句柄结构体（IrStructDef）、yield 点切分
+// R10-R12 预留挂接点（#45 注释的兑现情况）：
+// - R10 defer（已落地）：展开点在 lower——IrBlockStmt/Return/Break/Continue 的
+//   所有退出路径尾部逆序插入已注册 defer 语句（"IR 层展开，三后端免费获得"，
+//   见 PRD R10）；defer 内 return 的拒绝语义留在语义层。展开后的 IR 只由既有
+//   语句形态组成，后端零改动；带 defer 的作用域块以 IrDeferScopeStmt（Kind 仍
+//   为 Block）承载，见其注释。
+// - R11 match（已落地）：lower 降解为比较+跳转链（If 链）；密集值的跳转表生成
+//   属后端优化，不在降解层做（PRD R11）。匹配主体/结果各占一个隐藏局部变量，
+//   分支体经结果变量回填——IR 中不存在独立 Match 节点。
+// - R12 coro/yield（预留）：IrFunction 增加 coro 标志（随 M6 引入）。状态机
+//   变换在 IR 层完成：局部变量提升到句柄结构体（IrStructDef）、yield 点切分
 //   state 编号、resume 展开为 switch 状态分发（PRD R12）。硬约束"yield 不得
-//   出现在 pending defer 作用域"在变换前检查。
+//   出现在 pending defer 作用域"在变换前检查，检测依据 = IrDeferScopeStmt
+//   （defer 展开时保留的结构化信息，见其注释）。
 //
 // libca：作用域表用 ca::collection::HashMap（与 SemanticAnalyzer::Scope 一致），
 // 有序集合用 std::vector（与 ast.hpp 一致）；契约错误走 ca::Result。
@@ -248,10 +251,12 @@ namespace ir {
             Break,
             Continue,
             Block, // 复合语句（独立作用域）
-            // ---- 预留扩展位（仅注释占位，枚举值随特性落地时引入）----
-            // Defer, // R10：defer 注册语句；退出序列由 lower 展开到作用域退出点
-            // Match, // R11：match 降解为比较+跳转链后落地
-            // Yield, // R12：协程 yield 点（状态机变换后）
+            // ---- 预留扩展位说明（R10/R11 已落地，未新增枚举值）----
+            // defer 与 match 在 lower 层全部降解为既有语句形态（退出点插入 /
+            // If 链），后端只见既有 Kind；带 defer 注册记录的作用域用
+            // IrDeferScopeStmt（Kind::Block 的子类）承载。若后续特性需要
+            // 后端可见的新形态，再在此追加枚举值。
+            // Yield, // R12：协程 yield 点（状态机变换后，M6 引入）
         };
 
         Kind kind;
@@ -336,6 +341,18 @@ namespace ir {
     struct IrBlockStmt : IrStmt {
         std::vector<std::unique_ptr<IrStmt>> statements;
         IrBlockStmt(int l, int c) : IrStmt(Kind::Block, l, c) {}
+    };
+
+    // R10 defer：带 defer 注册记录的作用域块（coro 挂接点，PRD R12 前置）。
+    // 仅当作用域内注册了 defer 时，lower 用本节点替换普通 IrBlockStmt：
+    // - 语义展开已就地完成（所有退出点逆序插入注册的退出动作），后端按
+    //   Kind::Block 处理即可——子类与基类布局兼容，零改动；
+    // - defers 保存注册序的退出动作（与展开所用语句同构，未逆序），供 R12
+    //   coro 变换检测硬约束"yield 不得出现在 pending defer 作用域"：凡
+    //   yield 出现在非空 defers 的本节点子树内即违规。
+    struct IrDeferScopeStmt : IrBlockStmt {
+        std::vector<std::unique_ptr<IrStmt>> defers; // 注册序（未逆序）
+        IrDeferScopeStmt(int l, int c) : IrBlockStmt(l, c) {}
     };
 
     // ---------------------------------------------------------------------------

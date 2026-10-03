@@ -77,3 +77,8 @@ void InitListExpr::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 
 // StmtVarDeclaration节点的accept实现
 void StmtVarDeclaration::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+// DeferStmt节点的accept实现（PRD R10；追加在文件尾）
+void DeferStmt::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+
+// MatchExpr节点的accept实现（PRD R11；追加在文件尾）
+void MatchExpr::accept(ASTVisitor& visitor) { visitor.visit(*this); }

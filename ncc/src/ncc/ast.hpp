@@ -42,11 +42,19 @@ enum class ASTNodeType {
 
     // 其他
     PARAMETER,
-    ARGUMENT
+    ARGUMENT,
+
+    // 追加区（PRD R10/R11 语言特性；新节点类型只在表尾追加，
+    // 不改动既有枚举值——并行分支合并冲突最小化）
+    DEFER_STMT, // defer <表达式语句>;（PRD R10）
+    MATCH_EXPR  // match (x) { patterns => body, ... }（PRD R11）
 };
 
 // 前向声明
 class ASTVisitor;
+// 追加区节点的前置声明（PRD R10/R11；完整定义在本文件尾部追加区）
+class DeferStmt;
+class MatchExpr;
 
 // import 指令（PRD R2a 多文件整体编译）：
 // - `import math;` → target = "math"，quoted = false（装载器解析为导入者同目录 math.nc）
@@ -466,6 +474,67 @@ public:
     virtual void visit(MemberExpr& node) = 0;
     virtual void visit(InitListExpr& node) = 0;
     virtual void visit(StmtVarDeclaration& node) = 0;
+
+    // 追加区（PRD R10/R11；新 visit 方法只在接口尾部追加）
+    virtual void visit(DeferStmt& node) = 0;
+    virtual void visit(MatchExpr& node) = 0;
+};
+
+// ---------------------------------------------------------------------------
+// 追加区：defer 与 match 的 AST 节点（PRD R10/R11）。
+// 追加式纪律：新类定义一律放在 ASTVisitor 之后、#endif 之前。
+// ---------------------------------------------------------------------------
+
+// defer 语句（PRD R10）：`defer <语句>;`。
+// 语义约束由语义分析裁决（diagnostics）：body 必须是表达式语句；defer 内再
+// return/break/continue/defer 均为编译错误。IR 侧在 lower 层展开（退出点
+// 逆序插入注册的退出动作，值捕获在注册时求值），后端零改动。
+class DeferStmt : public Stmt {
+public:
+    std::unique_ptr<Stmt> body; // 解析期接受完整语句，语义期限定为表达式语句
+
+    DeferStmt(int l, int c) : Stmt(ASTNodeType::DEFER_STMT, l, c) {}
+
+    void accept(ASTVisitor& visitor) override;
+};
+
+// match 模式（PRD R11）。
+// - Constant：整型/字符常量（支持负号）；isChar 区分字符常量
+// - Range：lo..hi（含端点，决策记录：闭区间；lo > hi 由语义层报错）
+// - Wildcard：`_`（通配，等价 default）
+// - Guard：`name if expr`（绑定变量作用域 = 所在分支）
+struct MatchPattern {
+    enum class Kind { Constant, Range, Wildcard, Guard };
+
+    Kind kind = Kind::Constant;
+    bool isChar = false;         // Constant/Range：字符常量形态
+    int lo = 0;                  // Constant：值；Range：下界
+    int hi = 0;                  // 仅 Range：上界（含端点）
+    std::string binding;         // 仅 Guard：绑定名
+    std::unique_ptr<Expr> guard; // 仅 Guard：守卫条件（绑定名可见）
+    int line = 0;
+    int column = 0;
+};
+
+// match 分支：模式列表（多值 = 多个模式 OR）+ 分支体（单表达式或块）
+struct MatchArm {
+    std::vector<std::unique_ptr<MatchPattern>> patterns;
+    std::unique_ptr<Expr> exprBody;  // 单表达式形态（与 blockBody 二选一）
+    std::unique_ptr<Stmt> blockBody; // 块形态：副作用分支，值为 0
+    int line = 0;
+    int column = 0;
+};
+
+// match 表达式（PRD R11）：值 = 命中分支体的值；无分支命中时值为 0。
+// 降解在 IR 层完成（比较+跳转 If 链），后端零改动。
+class MatchExpr : public Expr {
+public:
+    std::unique_ptr<Expr> subject; // 主体表达式（仅求值一次；须为 int/char）
+    std::vector<std::unique_ptr<MatchArm>> arms;
+
+    MatchExpr(int l, int c) : Expr(ASTNodeType::MATCH_EXPR, l, c) {}
+
+    void accept(ASTVisitor& visitor) override;
 };
 
 #endif // NCC_AST_H

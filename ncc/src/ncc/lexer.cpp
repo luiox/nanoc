@@ -24,6 +24,9 @@ void Lexer::initKeywords() {
     m_keywords["import"] = NTokenKind::KEYWORD_IMPORT;
     m_keywords["export"] = NTokenKind::KEYWORD_EXPORT;
     m_keywords["extern"] = NTokenKind::KEYWORD_EXTERN;
+    // PRD R10/R11 语言特性关键字（追加在表尾，不改既有映射）
+    m_keywords["defer"] = NTokenKind::KEYWORD_DEFER;
+    m_keywords["match"] = NTokenKind::KEYWORD_MATCH;
 }
 
 char Lexer::currentChar() const {
@@ -191,6 +194,11 @@ Token Lexer::readOperator() {
             advance();
             return Token(NTokenKind::OPERATOR_EQUAL, "==", startLine, startColumn);
         }
+        // =>（match 分支引导，PRD R11；追加在 = 判定之后）
+        if (currentChar() == '>') {
+            advance();
+            return Token(NTokenKind::OPERATOR_FAT_ARROW, "=>", startLine, startColumn);
+        }
         return Token(NTokenKind::OPERATOR_ASSIGN, "=", startLine, startColumn);
     case '!':
         if (currentChar() == '=') {
@@ -226,12 +234,17 @@ Token Lexer::readOperator() {
         }
         throw std::runtime_error("Expected '|' at line " + std::to_string(m_line));
     case '.':
-        // ...（extern 声明可变参数，PRD R3）；单独的 . 是成员访问。
-        // switch 前已消费第一个 '.'，此处再消费两个
+        // ...（extern 声明可变参数，PRD R3）；单独的 . 是成员访问；
+        // ..（match 区间模式，PRD R11，含端点）。
+        // switch 前已消费第一个 '.'，此处再按序检查后续字符
         if (currentChar() == '.' && peekChar() == '.') {
             advance();
             advance();
             return Token(NTokenKind::ELLIPSIS, "...", startLine, startColumn);
+        }
+        if (currentChar() == '.') {
+            advance();
+            return Token(NTokenKind::OPERATOR_DOTDOT, "..", startLine, startColumn);
         }
         return Token(NTokenKind::OPERATOR_DOT, ".", startLine, startColumn);
     default:
