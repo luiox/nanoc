@@ -10,11 +10,12 @@
 void
 help_handler()
 {
-    printf("Usage: nvm <input file> [options]\n");
-    printf("Options: --Xss set stack size(b,k,m)\n");
-    printf("         --host-lib <path> load host library for dynamic imports\n");
-    printf("                 (repeatable, e.g. --host-lib msvcrt.dll)\n");
-    printf("Example: nvm test.nci --host-lib C:/Windows/System32/msvcrt.dll\n");
+    // 用法属于错误路径输出（仅在参数不足时打印），走 stderr
+    fprintf(stderr, "Usage: nvm <input file> [options]\n");
+    fprintf(stderr, "Options: --Xss set stack size(b,k,m)\n");
+    fprintf(stderr, "         --host-lib <path> load host library for dynamic imports\n");
+    fprintf(stderr, "                 (repeatable, e.g. --host-lib msvcrt.dll)\n");
+    fprintf(stderr, "Example: nvm test.nci --host-lib C:/Windows/System32/msvcrt.dll\n");
 }
 
 int
@@ -35,7 +36,7 @@ main(int argc, char * argv[])
         if (arg == "--host-lib") {
             // 动态导入宿主库（可多次，按序解析）
             if (i + 1 >= argc) {
-                printf("Error: --host-lib missing library path\n");
+                fprintf(stderr, "Error: --host-lib missing library path\n");
                 return 1;
             }
             hostLibs.push_back(argv[++i]);
@@ -65,7 +66,7 @@ main(int argc, char * argv[])
                 stackSize = size * 1024 * 1024;
                 break;
             default:
-                printf("Error: Invalid stack size unit '%c'\n", unit);
+                fprintf(stderr, "Error: Invalid stack size unit '%c'\n", unit);
                 return 1;
             }
         }

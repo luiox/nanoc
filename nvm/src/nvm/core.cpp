@@ -66,7 +66,8 @@ NVirtualMachine::load(std::string filename)
 {
     FILE * pf = fopen(filename.c_str(), "rb");
     if (!pf) {
-        printf("Error: Cannot open %s\n", filename.c_str());
+        // 进程级致命 I/O 错误：不经异常通道，报 stderr 后退出（CLI 错误流约定）
+        fprintf(stderr, "Error: Cannot open %s\n", filename.c_str());
         exit(1);
     }
     fseek(pf, 0, SEEK_END);
@@ -513,7 +514,11 @@ NVirtualMachine::start()
         if (h[op])
             (this->*h[op])();
         else {
-            printf("Unknown op 0x%02X at %d\n", op, m_pc);
+            // VM 运行时诊断走 stdout（与 CALLX 未解析等运行时报错一致，
+            // tests 以 CaptureStdout 钉死该约定）；格式对齐 "Error: " 前缀
+            printf("Error: unknown opcode 0x%02X at pc %d, execution stopped\n",
+                   op,
+                   m_pc);
             break;
         }
     }
@@ -529,7 +534,7 @@ void
 NVirtualMachine::print_stack(int32_t s, int32_t e)
 {
     for (int i = s; i < e; i += STACK_SLOT_SIZE)
-        printf("[%04X]=%d\n", i, *(int32_t *)&m_stack[i]);
+        printf("[%04X]=%d\n", i, memRead32(m_stack, i));
 }
 
 int32_t
