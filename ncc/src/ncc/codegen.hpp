@@ -97,6 +97,15 @@ private:
         Expr* expr;          // 初始化表达式（借用 AST 所有权）
     };
 
+    // 顶层函数条目（PRD R2a 多文件）：展示名 → 候选列表（跨文件私有同名
+    // 函数共存）。调用点解析与语义同规则：当前文件定义优先，其次导出定义。
+    struct FunctionEntry {
+        std::string file;       // 定义所在文件（空 = 单文件模式）
+        std::string label;      // 汇编标号（main/导出名不变；私有 .f_<stem>_<name>）
+        std::string returnType; // 规范返回类型名
+        bool isExported = false;
+    };
+
     // 输出缓冲：函数体与数据段分开收集，最后统一拼装
     // （extern 指令在函数体生成期间才收集完毕，需插在文件头）
     std::string m_code;
@@ -107,12 +116,19 @@ private:
     std::vector<std::string> m_breakLabels;
     std::vector<std::string> m_continueLabels;
 
-    // 符号表：函数名集合 + 全局/局部变量（局部优先于全局）
-    std::set<std::string> m_functions;
+    // 符号表：函数条目（名字 → 候选）+ 全局/局部变量（局部优先于全局）。
+    // m_globalSymbols 的键 = 存储键：导出符号与单文件模式用展示名，未导出
+    // 顶层变量用 "文件\x01名字"（跨文件私有同名共存，PRD R2a）
+    std::map<std::string, std::vector<FunctionEntry>> m_functionTable;
     std::map<std::string, Symbol> m_globalSymbols;
     std::map<std::string, Symbol> m_localSymbols;
-    std::vector<std::string> m_globalOrder; // 数据段发射顺序
+    std::vector<std::string> m_globalOrder; // 数据段发射顺序（存储键）
     int m_nextSlot = 0;                     // 当前函数已分配的最大槽位
+    std::string m_currentFile;              // 当前生成函数的定义文件（解析私有标号用）
+
+    // 文件 stem → 汇编标号前缀（mangle 用）：同 stem 的不同文件追加 _2/_3...
+    std::map<std::string, std::string> m_modulePrefixes;
+    std::set<std::string> m_usedPrefixes;
 
     // struct 布局表与 typedef 表（代码生成侧独立重建；typedef 别名 → 规范基型）
     std::map<std::string, StructLayout> m_structs;
@@ -122,8 +138,7 @@ private:
     std::set<VarDeclaration*> m_registeredGlobals; // 防止重复登记同一声明
     std::vector<std::string> m_externs;            // 未定义的被调函数 → 宿主符号（callx）
     std::set<std::string> m_externSet;
-    std::map<std::string, std::string> m_stringLiterals;  // 字面量内容 → 数据标号（去重）
-    std::map<std::string, std::string> m_functionReturns; // 函数名 → 返回类型（规范名）
+    std::map<std::string, std::string> m_stringLiterals; // 字面量内容 → 数据标号（去重）
 
     // 当前函数的 struct 返回信息（sret 方案）
     std::string m_structReturnTag; // 非空 = 当前函数返回 struct，值为标签
@@ -140,6 +155,19 @@ private:
     const Symbol* findSymbol(const std::string& name) const;
     void registerGlobal(VarDeclaration& node);
     void emitGlobalInits();
+
+    // ---- 顶层符号标号（PRD R2a mangle 决策）----
+    // main 恒为 "main"；导出符号用原名（函数 = 名字，全局变量 = ".g_" + 名字，
+    // 与既有单文件产物一致）；未导出的顶层符号加文件 stem 前缀
+    // （".f_<stem>_<name>"），同名私有符号跨文件隔离。
+    // 单文件模式（sourceFile 为空）完全不 mangle，产物与既有基线逐字节一致。
+    std::string functionLabel(const FuncDeclaration& node);
+    std::string modulePrefix(const std::string& file);
+    // 调用点函数解析：当前文件定义优先，其次导出定义；未命中 = 宿主外部符号
+    const FunctionEntry* resolveFunction(const std::string& name) const;
+    // 全局变量的存储键（跨文件私有同名共存）
+    static std::string
+    globalKey(const std::string& name, const std::string& file, bool isExported);
 
     // 类型解析（typedef/struct 透明展开）与规范名工具
     std::string resolveBaseType(const std::string& name, bool isStructTag) const;
