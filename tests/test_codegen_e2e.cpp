@@ -226,3 +226,119 @@ TEST(CodegenE2ETest, StringLiteralToHostStrlen) {
     EXPECT_EQ(runProgram(source, "codegen_e2e_strlen.nci", "strlen", hostStrlen), 50);
     std::remove("codegen_e2e_strlen.nci");
 }
+
+// ---------------------------------------------------------------------------
+// R1.2 类型系统扩展（第二批）：struct 传参/返回 / 自引用链表 / typedef
+// ---------------------------------------------------------------------------
+
+// struct 按值传参 + sret 返回：矩形面积 = (4-1)*(6-2) = 12；
+// 嵌套成员链、整体拷贝、struct 数组混合运算
+TEST(CodegenE2ETest, StructParameterAndReturn) {
+    std::string source = "struct Point { int x; int y; };\n"
+                         "struct Rect { struct Point tl; struct Point br; };\n"
+                         "int area(struct Rect r) {\n"
+                         "    return (r.br.x - r.tl.x) * (r.br.y - r.tl.y);\n"
+                         "}\n"
+                         "struct Point make(int x, int y) {\n"
+                         "    struct Point p = {x, y};\n"
+                         "    return p;\n"
+                         "}\n"
+                         "int main() {\n"
+                         "    struct Rect r;\n"
+                         "    r.tl = make(1, 2);\n"
+                         "    r.br = make(4, 6);\n"
+                         "    struct Point copy = r.tl;\n"
+                         "    struct Point arr[2];\n"
+                         "    arr[0] = make(10, 20);\n"
+                         "    arr[1] = arr[0];\n"
+                         "    arr[1].x = arr[1].x + 1;\n"
+                         "    return area(r) * 100 + arr[1].x + copy.y;\n"
+                         "}";
+    // area=12 → 1200 + 11 + 2 = 1213
+    EXPECT_EQ(runProgram(source, "codegen_e2e_struct_rect.nci"), 1213);
+    std::remove("codegen_e2e_struct_rect.nci");
+}
+
+// 自引用 struct 指针：-> 构建链表 1..5，遍历求和 = 15；NULL 终止判断
+TEST(CodegenE2ETest, StructLinkedListBuildAndSum) {
+    std::string source = "struct Node { int v; struct Node* next; };\n"
+                         "int main() {\n"
+                         "    struct Node n1;\n"
+                         "    struct Node n2;\n"
+                         "    struct Node n3;\n"
+                         "    struct Node n4;\n"
+                         "    struct Node n5;\n"
+                         "    n1.v = 1;\n"
+                         "    n2.v = 2;\n"
+                         "    n3.v = 3;\n"
+                         "    n4.v = 4;\n"
+                         "    n5.v = 5;\n"
+                         "    n1.next = &n2;\n"
+                         "    n2.next = &n3;\n"
+                         "    n3.next = &n4;\n"
+                         "    n4.next = &n5;\n"
+                         "    n5.next = NULL;\n"
+                         "    int sum = 0;\n"
+                         "    struct Node* p = &n1;\n"
+                         "    while (p != NULL) {\n"
+                         "        sum = sum + p->v;\n"
+                         "        p = p->next;\n"
+                         "    }\n"
+                         "    return sum;\n"
+                         "}";
+    EXPECT_EQ(runProgram(source, "codegen_e2e_struct_list.nci"), 15);
+    std::remove("codegen_e2e_struct_list.nci");
+}
+
+// 链表倒序构建（头插）+ 经函数传 struct 指针统计：验证 -> 写链与跨函数读链
+// 头插法经 struct 数组构建链表 + 经函数传 struct 指针统计：
+// 验证 -> 写链、&nodes[i] 取元素地址与跨函数读链
+// （循环体内声明的局部变量跨迭代复用同一槽位，故节点取自 struct 数组）
+TEST(CodegenE2ETest, StructLinkedListHeadInsert) {
+    std::string source = "struct Node { int v; struct Node* next; };\n"
+                         "int countGE(struct Node* head, int threshold) {\n"
+                         "    int n = 0;\n"
+                         "    struct Node* p = head;\n"
+                         "    while (p) {\n"
+                         "        if (p->v >= threshold) {\n"
+                         "            n = n + 1;\n"
+                         "        }\n"
+                         "        p = p->next;\n"
+                         "    }\n"
+                         "    return n;\n"
+                         "}\n"
+                         "int main() {\n"
+                         "    struct Node nodes[6];\n"
+                         "    struct Node* head = NULL;\n"
+                         "    int i = 5;\n"
+                         "    while (i >= 0) {\n"
+                         "        nodes[i].v = (i + 1) * (i + 1);\n"
+                         "        nodes[i].next = head;\n"
+                         "        head = &nodes[i];\n"
+                         "        i = i - 1;\n"
+                         "    }\n"
+                         "    return countGE(head, 10) * 10 + countGE(head, 100);\n"
+                         "}";
+    // 平方序列 1,4,9,16,25,36（头插后 head=1）；>=10 有 3 个、>=100 有 0 个
+    EXPECT_EQ(runProgram(source, "codegen_e2e_struct_headinsert.nci"), 30);
+    std::remove("codegen_e2e_struct_headinsert.nci");
+}
+
+TEST(CodegenE2ETest, TypedefTransparentMixedUse) {
+    std::string source = "struct Pair { int a; int b; };\n"
+                         "typedef struct Pair PairT;\n"
+                         "typedef int MyInt;\n"
+                         "int pick(PairT p) {\n"
+                         "    return p.a * 10 + p.b;\n"
+                         "}\n"
+                         "int main() {\n"
+                         "    struct Pair x = {3, 4};\n"
+                         "    PairT y = x;\n"
+                         "    y.a = 5;\n"
+                         "    MyInt scale = 2;\n"
+                         "    return pick(y) * scale + x.a;\n"
+                         "}";
+    // pick({5,4}) = 54 → 108 + 3 = 111
+    EXPECT_EQ(runProgram(source, "codegen_e2e_typedef.nci"), 111);
+    std::remove("codegen_e2e_typedef.nci");
+}

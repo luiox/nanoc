@@ -173,7 +173,9 @@ private:
     void emitMemberAddress(MemberExpr& node, const FieldLayout** outField);
 
     // struct 临时槽：帧尾临时区分配槽位，越界防御性抛异常
-    int allocStructTemp();
+    // struct 临时槽：帧尾临时区分配 sizeWords 字的连续块，返回块内最高槽号
+    // （拷贝自该地址向高地址延伸，恰好覆盖块内全部槽位）；越界防御性抛异常
+    int allocStructTemp(int sizeWords);
     // 栈顶=源地址、R0=目的地址 → 逐字拷贝 sizeWords 字，push 目的地址
     void emitPopCopyPush(int sizeWords);
     // R1=源地址、R2=目的地址 → 逐字拷贝 sizeWords 字

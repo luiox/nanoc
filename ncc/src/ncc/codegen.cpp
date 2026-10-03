@@ -598,12 +598,15 @@ int CodeGenerator::countStructTemps(const Stmt* stmt) {
 
 // ---- struct 临时槽与拷贝 ----
 
-int CodeGenerator::allocStructTemp() {
-    if (m_tempCursor >= m_tempLimit) {
+int CodeGenerator::allocStructTemp(int sizeWords) {
+    if (m_tempCursor + sizeWords > m_tempLimit) {
         throw std::runtime_error(
           "internal error: struct temporary slots exhausted");
     }
-    return ++m_tempCursor;
+    // 块占 [cursor+1 .. cursor+sizeWords] 号槽；返回最高槽号作为基址
+    // （与栈布局一致：地址 BP-4*槽号，槽号越大地址越低，拷贝向高地址延伸）
+    m_tempCursor += sizeWords;
+    return m_tempCursor;
 }
 
 // R1=源地址、R2=目的地址 → 逐字拷贝 sizeWords 字
@@ -635,7 +638,7 @@ void CodeGenerator::emitPopCopyPush(int sizeWords) {
 void CodeGenerator::emitStructArgCopy(const std::string& structType) {
     const StructLayout* layout = structLayoutOf(structType);
     const int sizeWords = layout != nullptr ? std::max(layout->sizeWords, 1) : 1;
-    const int slot = allocStructTemp();
+    const int slot = allocStructTemp(sizeWords);
     emit("    mov R0, R5");
     emit("    subi R0, " + std::to_string(4 * slot)); // 目的地址
     emitPopCopyPush(sizeWords);
@@ -805,7 +808,7 @@ void CodeGenerator::visit(FuncDeclaration& node) {
     m_tempLimit = m_nextSlot + localSlots + tempWords + sretWords;
     m_tempCursor = m_nextSlot + localSlots;
     if (returnsStruct) {
-        m_sretSaveSlot = allocStructTemp(); // 临时区首个槽固定存调用者的 R7
+        m_sretSaveSlot = allocStructTemp(1); // 1 字槽固定存调用者的 R7
     }
 
     const int enterSize = 4 * m_tempLimit;
@@ -1176,7 +1179,7 @@ void CodeGenerator::visit(CallExpr& node) {
     // struct 返回（sret）：接收槽地址经 R7 传入
     int sretSlot = 0;
     if (returnLayout != nullptr) {
-        sretSlot = allocStructTemp();
+        sretSlot = allocStructTemp(std::max(returnLayout->sizeWords, 1));
         emit("    mov R7, R5");
         emit("    subi R7, " + std::to_string(4 * sretSlot));
     }
