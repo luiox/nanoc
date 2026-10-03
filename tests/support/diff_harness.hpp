@@ -23,16 +23,16 @@
 //   并把 extern/puts 场景加入矩阵，见文件尾部 TODO 注释）。
 //
 // ---------------------------------------------------------------------------
-// R6 接入点（未来 LLVM 后端如何加入矩阵）
+// R6 接入点（LLVM 后端如何加入矩阵——已按此设计落地）
 // ---------------------------------------------------------------------------
-// 1. 实现 `LlvmBackend : public nanoc_diff::IDiffBackend`：
+// 1. 实现 `LlvmBackend : public nanoc_diff::IDiffBackend`（见 diff_harness.cpp）：
 //    - name() 返回 "llvm"（矩阵列名）；
-//    - probe() 探测 llc/clang 工具链可用性（不可用返回 false → 矩阵记 skip，
+//    - probe() 探测 llc/链接器可用性（不可用返回 false → 矩阵记 skip，
 //      不算失败，与 C 后端的 skip 策略一致）；
 //    - execute() 走 ir::Module → LLVM IR → 目标可执行 → 运行 → 退出码，并把
 //      退出码归一化到低 8 位填入 BackendOutput::exitCode8。
-// 2. 在 registerBuiltinBackends() 里追加一次 registerBackend(...)（或由测试
-//    侧自行注册），矩阵与汇总渲染对后端数量无假设，自动扩列。
+// 2. 在 registerBuiltinBackends() 里追加一次 registerBackend(...)，矩阵与
+//    汇总渲染对后端数量无假设，自动扩列。
 
 #include <cstdint>
 #include <memory>
@@ -103,8 +103,8 @@ namespace nanoc_diff {
     void registerBackend(std::unique_ptr<IDiffBackend> backend);
     const std::vector<IDiffBackend*>& backends();
 
-    // 注册内置两后端：vm（进程内，恒可用）与 c（进程外真编译，随编译器探测）。
-    // 幂等：重复调用不产生重复列。未来 LLVM 后端在此追加（见文件头 R6 接入点）。
+    // 注册内置三后端：vm（进程内，恒可用）、c（进程外真编译，随编译器探测）
+    // 与 llvm（PRD R6，随 llc/链接器探测）。幂等：重复调用不产生重复列。
     void registerBuiltinBackends();
 
     // ---------------------------------------------------------------------------

@@ -19,6 +19,22 @@ jobs:
       - name: Configure
         run: xmake f -p windows -a x64 -m release -y
 
+      - name: Ensure LLVM toolchain (llc + lld-link) for the llvm backend
+        shell: pwsh
+        run: |
+          if (-not (Get-Command llc -ErrorAction SilentlyContinue)) {
+            Write-Host "llc not on PATH, installing LLVM via Chocolatey"
+            choco install llvm -y
+          }
+          $llc = (Get-Command llc -ErrorAction SilentlyContinue).Source
+          if ($llc) {
+            $dir = Split-Path $llc
+            "NANOC_LLVM_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "LLVM toolchain: $llc"
+          } else {
+            Write-Host "::warning::llc unavailable, the llvm diff column will SKIP"
+          }
+
       - name: Build
         run: xmake -y
 
