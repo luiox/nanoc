@@ -9,14 +9,37 @@
 #include <dlfcn.h>
 #endif
 
-// 小端 32 位读取（memcpy 实现避免对齐问题）
-static int32_t
-readI32(const int8_t * data, int64_t offset)
+namespace
 {
-    int32_t v;
-    memcpy(&v, data + offset, sizeof(v));
-    return v;
-}
+    // 解析一张符号表 entry：int32 nameLen + name + NUL + pad4（entry 起始基准）
+    // + addr + flags（规范 §2.1）。导入/导出表同构，tableName 仅用于错误消息
+    // （"import"/"export"）；截断或非法即抛 std::runtime_error
+    void
+    readSymbolEntry(const int8_t * data,
+                    int64_t fileSize,
+                    int64_t & off,
+                    const char * tableName,
+                    std::string & name,
+                    int32_t & addr,
+                    int32_t & flags)
+    {
+        if (off + 4 > fileSize)
+            throw std::runtime_error(std::string("NCI v2.1: truncated ") + tableName
+                                     + " table");
+        int32_t nameLen = readI32(data, off);
+        if (nameLen < 0 || off + 4 + (int64_t)nameLen + 1 > fileSize)
+            throw std::runtime_error(std::string("NCI v2.1: bad ") + tableName
+                                     + " symbol name");
+        name.assign((const char *)&data[off + 4], nameLen);
+        int64_t fixed = ((int64_t)4 + nameLen + 1 + 3) & ~(int64_t)3;
+        if (off + fixed + 8 > fileSize)
+            throw std::runtime_error(std::string("NCI v2.1: truncated ") + tableName
+                                     + " entry");
+        addr = readI32(data, off + fixed);
+        flags = readI32(data, off + fixed + 4);
+        off += fixed + 8;
+    }
+} // namespace
 
 NVirtualMachine::NVirtualMachine(int32_t stackSize)
   : m_sp(m_registers[4])
@@ -102,39 +125,17 @@ NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
     int64_t off = NCI_HEADER_SIZE + (int64_t)codeSize + dataSize;
     std::vector<NImportSymbol> imports;
     for (int32_t i = 0; i < importCount; i++) {
-        if (off + 4 > fileSize)
-            throw std::runtime_error("NCI v2.1: truncated import table");
-        int32_t nameLen = readI32(data, off);
-        if (nameLen < 0 || off + 4 + (int64_t)nameLen + 1 > fileSize)
-            throw std::runtime_error("NCI v2.1: bad import symbol name");
         NImportSymbol sym;
-        sym.name.assign((const char *)&data[off + 4], nameLen);
-        int64_t fixed = ((int64_t)4 + nameLen + 1 + 3) & ~(int64_t)3;
-        if (off + fixed + 8 > fileSize)
-            throw std::runtime_error("NCI v2.1: truncated import entry");
-        sym.addr = readI32(data, off + fixed);
-        sym.flags = readI32(data, off + fixed + 4);
+        readSymbolEntry(data, fileSize, off, "import", sym.name, sym.addr, sym.flags);
         imports.push_back(sym);
-        off += fixed + 8;
     }
 
     // 导出表：同构，addr=代码段地址，flags 恒 0
     std::vector<NExportSymbol> exports;
     for (int32_t i = 0; i < exportCount; i++) {
-        if (off + 4 > fileSize)
-            throw std::runtime_error("NCI v2.1: truncated export table");
-        int32_t nameLen = readI32(data, off);
-        if (nameLen < 0 || off + 4 + (int64_t)nameLen + 1 > fileSize)
-            throw std::runtime_error("NCI v2.1: bad export symbol name");
         NExportSymbol sym;
-        sym.name.assign((const char *)&data[off + 4], nameLen);
-        int64_t fixed = ((int64_t)4 + nameLen + 1 + 3) & ~(int64_t)3;
-        if (off + fixed + 8 > fileSize)
-            throw std::runtime_error("NCI v2.1: truncated export entry");
-        sym.addr = readI32(data, off + fixed);
-        sym.flags = readI32(data, off + fixed + 4);
+        readSymbolEntry(data, fileSize, off, "export", sym.name, sym.addr, sym.flags);
         exports.push_back(sym);
-        off += fixed + 8;
     }
 
     // 全部校验通过后再提交，避免异常路径污染 VM 状态。
@@ -142,7 +143,7 @@ NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
     if ((int64_t)codeSize + dataSize > m_stackSize)
         throw std::runtime_error("NCI v2.1: data segment does not fit into memory");
     int8_t * newCode = (int8_t *)malloc(codeSize > 0 ? codeSize : 1);
-    memcpy(newCode, data + 32, codeSize);
+    memcpy(newCode, data + NCI_HEADER_SIZE, codeSize);
     free(m_code);
     m_code = newCode;
     m_codeSize = codeSize;
@@ -505,7 +506,7 @@ NVirtualMachine::start()
     h[0x7F] = &NVirtualMachine::executeNOP;
     // 栈底压入哨兵返回地址：main 顶层的 leave/ret 落到代码段末尾，循环自然结束
     m_sp -= STACK_SLOT_SIZE;
-    *(int32_t *)&m_stack[m_sp] = (int32_t)m_codeSize;
+    memWrite32(m_stack, m_sp, (int32_t)m_codeSize);
 
     while (m_pc < m_codeSize) {
         uint8_t op = m_code[m_pc];

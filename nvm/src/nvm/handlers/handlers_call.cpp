@@ -5,9 +5,9 @@ void
 NVirtualMachine::executeCALL()
 {
     if (m_pc + INSTR_LEN_IMM32 <= m_codeSize) {
-        int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 1]);
+        int32_t addr = readI32(m_code, m_pc + 1);
         m_sp -= STACK_SLOT_SIZE;
-        *reinterpret_cast<int32_t *>(&m_stack[m_sp]) = m_pc + 5;
+        memWrite32(m_stack, m_sp, m_pc + INSTR_LEN_IMM32);
         m_pc = addr;
     }
 }
@@ -26,10 +26,10 @@ NVirtualMachine::executeCALLX()
 {
     if (m_pc + INSTR_LEN_IMM32 > m_codeSize)
         return;
-    int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 1]);
+    int32_t addr = readI32(m_code, m_pc + 1);
     if (addr > 0 && addr < (int32_t)m_codeSize) {
         m_sp -= STACK_SLOT_SIZE;
-        *reinterpret_cast<int32_t *>(&m_stack[m_sp]) = m_pc + 5;
+        memWrite32(m_stack, m_sp, m_pc + INSTR_LEN_IMM32);
         m_pc = addr;
         return;
     }
@@ -64,7 +64,7 @@ void
 NVirtualMachine::executeRET()
 {
     if (m_sp + STACK_SLOT_SIZE <= m_stackSize) {
-        int32_t addr = *reinterpret_cast<int32_t *>(&m_stack[m_sp]);
+        int32_t addr = memRead32(m_stack, m_sp);
         m_sp += STACK_SLOT_SIZE;
         m_pc = addr;
     }

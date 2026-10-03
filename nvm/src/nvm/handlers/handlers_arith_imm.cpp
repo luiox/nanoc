@@ -6,7 +6,7 @@ NVirtualMachine::executeADDI()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t val = *(int32_t *)&m_code[m_pc + 2];
+        int32_t val = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             m_registers[reg] += val;
             m_pc += INSTR_LEN_REG_IMM32;
@@ -19,7 +19,7 @@ NVirtualMachine::executeSUBI()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t val = *(int32_t *)&m_code[m_pc + 2];
+        int32_t val = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             m_registers[reg] -= val;
             m_pc += INSTR_LEN_REG_IMM32;
@@ -32,7 +32,7 @@ NVirtualMachine::executeMULI()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t val = *(int32_t *)&m_code[m_pc + 2];
+        int32_t val = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             m_registers[reg] *= val;
             m_pc += INSTR_LEN_REG_IMM32;
@@ -45,7 +45,7 @@ NVirtualMachine::executeDIVI()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t val = *(int32_t *)&m_code[m_pc + 2];
+        int32_t val = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT && val != 0) {
             m_registers[reg] /= val;
             m_pc += INSTR_LEN_REG_IMM32;
@@ -58,7 +58,7 @@ NVirtualMachine::executeMODI()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t val = *(int32_t *)&m_code[m_pc + 2];
+        int32_t val = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT && val != 0) {
             m_registers[reg] %= val;
             m_pc += INSTR_LEN_REG_IMM32;
@@ -86,7 +86,7 @@ NVirtualMachine::executeANDI()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t val = *(int32_t *)&m_code[m_pc + 2];
+        int32_t val = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             m_registers[reg] &= val;
             m_pc += INSTR_LEN_REG_IMM32;
@@ -99,7 +99,7 @@ NVirtualMachine::executeORI()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t val = *(int32_t *)&m_code[m_pc + 2];
+        int32_t val = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             m_registers[reg] |= val;
             m_pc += INSTR_LEN_REG_IMM32;
@@ -112,7 +112,7 @@ NVirtualMachine::executeXORI()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t val = *(int32_t *)&m_code[m_pc + 2];
+        int32_t val = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             m_registers[reg] ^= val;
             m_pc += INSTR_LEN_REG_IMM32;

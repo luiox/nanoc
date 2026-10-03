@@ -6,7 +6,7 @@ NVirtualMachine::executeLMM()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t val = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 2]);
+        int32_t val = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             m_registers[reg] = val;
             m_pc += INSTR_LEN_REG_IMM32;
@@ -19,9 +19,9 @@ NVirtualMachine::executeST()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 2]);
+        int32_t addr = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT && addr >= 0 && addr < m_stackSize) {
-            *reinterpret_cast<int32_t *>(&m_stack[addr]) = m_registers[reg];
+            memWrite32(m_stack, addr, m_registers[reg]);
             m_pc += INSTR_LEN_REG_IMM32;
         }
     }
@@ -32,7 +32,7 @@ NVirtualMachine::executeLEA()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 2]);
+        int32_t addr = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             m_registers[reg] = addr;
             m_pc += INSTR_LEN_REG_IMM32;
@@ -49,7 +49,7 @@ NVirtualMachine::executeLOAD()
         if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             int32_t addr = m_registers[src];
             if (addr >= 0 && addr < m_stackSize) {
-                m_registers[dest] = *reinterpret_cast<int32_t *>(&m_stack[addr]);
+                m_registers[dest] = memRead32(m_stack, addr);
             }
             m_pc += INSTR_LEN_REG_REG;
         }
@@ -65,7 +65,7 @@ NVirtualMachine::executeSTORE()
         if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             int32_t addr = m_registers[dest];
             if (addr >= 0 && addr < m_stackSize) {
-                *reinterpret_cast<int32_t *>(&m_stack[addr]) = m_registers[src];
+                memWrite32(m_stack, addr, m_registers[src]);
             }
             m_pc += INSTR_LEN_REG_REG;
         }
@@ -78,10 +78,10 @@ NVirtualMachine::executeLOADA()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 2]);
+        int32_t addr = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             if (addr >= 0 && addr < m_stackSize) {
-                m_registers[reg] = *reinterpret_cast<int32_t *>(&m_stack[addr]);
+                m_registers[reg] = memRead32(m_stack, addr);
             }
             m_pc += INSTR_LEN_REG_IMM32;
         }
@@ -94,10 +94,10 @@ NVirtualMachine::executeSTOREA()
 {
     if (m_pc + INSTR_LEN_REG_IMM32 <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        int32_t addr = *reinterpret_cast<const int32_t *>(&m_code[m_pc + 2]);
+        int32_t addr = readI32(m_code, m_pc + 2);
         if (reg < REGISTER_COUNT) {
             if (addr >= 0 && addr < m_stackSize) {
-                *reinterpret_cast<int32_t *>(&m_stack[addr]) = m_registers[reg];
+                memWrite32(m_stack, addr, m_registers[reg]);
             }
             m_pc += INSTR_LEN_REG_IMM32;
         }

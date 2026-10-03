@@ -196,6 +196,9 @@ private:
     // 从 HOST_ADDRESS_BASE 起分配
     int32_t bindHostSymbol(const std::string & name, NHostFunction fn, int32_t addr);
 
+    // 由 CMP/CMPI/TEST 的结果置 flags：三态映射到 Z/N/P（互斥），其余位清零
+    void setCompareFlags(int32_t result);
+
     // 导入符号是否为动态导入（待加载期解析）：旧格式 addr == 0 或 flags bit2
     static bool
     isDynamicImport(const NImportSymbol & sym)
