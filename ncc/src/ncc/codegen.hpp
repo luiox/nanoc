@@ -20,8 +20,11 @@
 // 字段，届时删除本 side-table。
 struct LinkageEntry {
     std::string name; // 展示名（与 IR 节点名字一致，冗余携带便于核对）
-    std::string file; // 定义所在文件（空 = 单文件模式）
+    std::string file; // 定义所在文件（空 = 单文件模式/独立模式合成声明）
     bool isExported = false;
+    // 依赖模块导出全局变量的合成声明（PRD R7 独立编译）：不落本模块数据段，
+    // 引用走导入表（汇编头 extern 行 + lea 经导入表回填，链接时解析）
+    bool isImported = false;
 };
 
 struct LinkageTable {
@@ -145,6 +148,8 @@ private:
     std::vector<GlobalInit> m_globalInits; // 进入 main 后统一执行
     std::vector<std::string> m_externs;    // 未定义的被调函数 → 宿主符号（callx）
     std::set<std::string> m_externSet;
+    std::vector<std::string> m_exports; // 导出符号标号（PRD R7：汇编头 export 行，
+                                        // 供 nas -r 链接器符号解析）
     // extern 声明（PRD R3）：varargs 标记（cdecl 调用序列判定）与返回类型名
     // （调用点返回值类型；未声明外部兜底 int，保持 #37 兼容路径）
     std::set<std::string> m_variadicExterns;
