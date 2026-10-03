@@ -62,6 +62,8 @@ header(32B) | code(codeSize) | data(dataSize) | import table | export table
 
 **调用约定**：汇编侧 `.calling_convention fastcall|cdecl` 顺序作用于其后声明的 `extern`（文件级顺序生效），写入对应导入 entry 的 flags。fastcall 前 4 个整型参数走 R0-R3；cdecl 参数压栈、由调用者清栈（`addi R4, N`）。约定仅是符号元数据，指令编码不受影响。
 
+**语言侧发射约定（ncc，PR #52）**：语言级 `extern` 声明（PRD R3）由 ncc 发射为无地址动态导入 `extern name`（nas 分配伪宿主地址并置 flags bit2，加载期经 `--host-lib` 按名解析）。带 `...`（varargs）的 extern 符号发射为 `.calling_convention cdecl` 环绕 `extern name`，随后立即发射 `.calling_convention fastcall` 恢复缺省——因 `.calling_convention` 文件级顺序生效，不恢复会误染其后声明的 extern。对应调用点序列：varargs extern 实参**自右向左压栈**（首参最后压、留在栈顶），`callx` 后 `addi R4, 4*N`（N = 实参个数）调用者清栈；非 varargs extern 仍走 fastcall（前 4 参弹入 R0-R3，第 5 参起压栈、调用后清 `addi R4, 4*(N-4)`）。
+
 **动态链接约定**：导入 entry `flags bit2 = 1` 表示动态导入。nas 对无地址的 `extern name` 分配**确定性伪宿主地址**——从 `0x7E000000`（`DYNAMIC_HOST_BASE`）起、按声明序 +4——同时写入导入表 addr 字段与 `callx` 站点 imm（同值），站点↔符号一对一，消除旧格式 addr=0 的按值歧义；伪地址区与代码/数据地址空间及 VM 宿主地址分配区（`0x7F000000` 起，`HOST_ADDRESS_BASE`）隔离。显式地址 `extern name addr` 为静态宿主绑定（不置 bit2）。
 
 加载期宿主库（`--host-lib <path>`，可多次）对动态导入按符号名 `GetProcAddress`/`dlsym` 解析：命中后将真 C 函数经**签名包装器**适配，登记在该导入的伪宿主地址上（`callx` 站点 imm 天然命中，无需改写）；未命中则明确报错（符号名 + 库名）。真 C 函数指针与 VM 宿主函数签名（`int32_t(*)(int32_t* regs, int8_t* mem, int32_t memSize)`）ABI 不同，不能直接 cast 调用——参考实现维护已知签名白名单（一期：`puts`/`putchar`/`abs`/`atoi`/`strlen`/`exit`/`GetTickCount`），库中存在但不在白名单的符号同样明确报错。字符串参数为 VM 统一内存地址，包装器内做边界保护（越界或非 NUL 终止视为无效参数）。
@@ -272,17 +274,23 @@ factorial:
 
 ## 6. 实现清单
 
-- [x] 指令定义：LOAD, STORE, ENTER, LEAVE, CALLX, MOV, CLR（PR #31/#32）
-- [x] 指令分离：ADD/ADDI, SUB/SUBI, MUL/MULI 等（PR #32）
+- [x] 指令定义：LOAD, STORE, ENTER, LEAVE, CALLX, MOV, CLR（v2.1 复活期主干直改；
+      分发表落位与 POP 0x42 归位见 PR #31/#32）
+- [x] 指令分离：ADD/ADDI, SUB/SUBI, MUL/MULI 等（v2.1 复活期主干直改；PUSHI 与
+      ANDI/ORI/XORI/SHLI/SHRI/JN/JP 补齐见 PR #32）
 - [x] **彻底移除：TRAP, SYSCALL, 所有系统调用**（v2.1 指令集无系统调用）
-- [x] VM 执行：CALL/CALLX/RET, ENTER/LEAVE（PR #31/#32）
+- [x] VM 执行：CALL/CALLX/RET, ENTER/LEAVE（复活期主干直改；R4=SP/R5=BP 寄存器
+      别名与栈底哨兵返回地址见 PR #31）
 - [x] VM 加载：v2.1 文件头/导入导出表/数据段/宿主分发/动态链接（PR #33）
 - [x] NAS：`.calling_convention`, `extern`, `export`，数据段与完整 v2.1 目标文件（PR #34）
 - [x] 集成验收：汇编 → 加载 → 宿主调用 e2e（PR #35）
-- [x] VM 链接器：`nas -r` 段合并/重定位/符号解析 + CALLX 双语义（PR R7）
+- [x] VM 链接器：`nas -r` 段合并/重定位/符号解析 + CALLX 双语义（PR #40，PRD R7）
 - [x] 宿主库直调通路：nas 动态导入伪宿主地址 + flags bit2、`nvm --host-lib` 按名解析 +
-      签名包装器白名单（R3 VM 侧前置）
-- [ ] 测试：C 标准库互操作（printf, malloc, exit 经宿主函数）
+      签名包装器白名单（PR #42；R3 VM 侧前置）
+- [x] 语言级 extern 声明：ncc 发射动态导入 + varargs cdecl 调用序列，msvcrt 真宿主
+      e2e（abs/atoi/strlen/puts/exit）（PR #52）
+- [ ] 测试：C 标准库互操作扩展（printf/malloc 等更多签名包装器；printf 属 VM varargs
+      P2，随 R7 导入表扩展）
 
 ---
 
