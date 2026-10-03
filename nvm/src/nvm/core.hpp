@@ -9,6 +9,12 @@
 
 constexpr int32_t DEFAULT_STACK_SIZE = 8 * 1024 * 1024;
 
+// NCI v2.1 文件头尺寸与魔数（规范 §2）。与 nas 侧 nas/instruction.hpp 的
+// NCI_HEADER_SIZE/NCI_MAGIC 同义异名——tests 会把两模块头文件收进同一 TU，
+// 同名常量重定义冲突，命名须错开（先例见 DYNAMIC_IMPORT_FLAG）
+constexpr int32_t NCI_V21_HEADER_SIZE = 32;
+constexpr uint8_t NCI_V21_MAGIC[8] = { 'N', 'a', 'n', 'o', 'C', '\0', '\0', '\0' };
+
 // 动态链接宿主地址分配起点（宿主地址与代码段地址空间隔离）。
 // nas 对无地址 extern 分配的伪宿主地址区为 0x7E000000 起（DYNAMIC_HOST_BASE），
 // 与本分配区隔离；两区均在代码/数据地址空间之外
@@ -191,6 +197,9 @@ private:
     // 从 HOST_ADDRESS_BASE 起分配
     int32_t bindHostSymbol(const std::string & name, NHostFunction fn, int32_t addr);
 
+    // 由 CMP/CMPI/TEST 的结果置 flags：三态映射到 Z/N/P（互斥），其余位清零
+    void setCompareFlags(int32_t result);
+
     // 导入符号是否为动态导入（待加载期解析）：旧格式 addr == 0 或 flags bit2
     static bool
     isDynamicImport(const NImportSymbol & sym)
@@ -201,7 +210,7 @@ private:
     int32_t m_pc;
     int32_t m_ax;
     int32_t m_flags;
-    int32_t m_registers[8];
+    int32_t m_registers[REGISTER_COUNT];
     // 规范 v2.1 寄存器角色：R4=SP、R5=BP。用引用别名保证寄存器指令
     // （mov/addi R4,...）与栈指令操作同一份存储
     int32_t & m_sp;
@@ -222,16 +231,5 @@ private:
     // 下一个可分配的宿主地址，从 HOST_ADDRESS_BASE 起递增
     int32_t m_nextHostAddr;
 };
-void Nvm_init(struct Nvm * vm, int64_t stack_size);
-
-void Nvm_destroy(struct Nvm * vm);
-
-void Nvm_load_file(struct Nvm * vm, char * file_name);
-
-void Nvm_run(struct Nvm * vm);
-
-void Nvm_print_info(struct Nvm * vm);
-
-void Nvm_print_stack_info(struct Nvm * vm, int64_t start, int64_t end);
 
 #endif // !NVM_CORE_H

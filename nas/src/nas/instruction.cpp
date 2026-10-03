@@ -55,6 +55,13 @@ write16(std::vector<uint8_t> & c, int16_t v)
     c.push_back((v >> 8) & 0xFF);
 }
 
+// 追加 opcode 字节（各指令类 emit 的公共前缀）
+void
+Instruction::emitOpcode()
+{
+    bytes.push_back(static_cast<uint8_t>(opcode));
+}
+
 // 追加 4 字节立即数；操作数为标号（pendingLabel 非空）时写 0 占位并记录回填偏移
 void
 Instruction::emitImm32(int32_t v)
@@ -87,7 +94,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -108,7 +115,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         emitImm32(addr);
     }
@@ -129,7 +136,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         emitImm32(addr);
     }
@@ -149,7 +156,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -169,7 +176,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -190,7 +197,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         emitImm32(addr);
     }
@@ -211,7 +218,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         emitImm32(addr);
     }
@@ -235,7 +242,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -256,7 +263,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -276,7 +283,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -297,7 +304,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -317,7 +324,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -338,7 +345,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -358,7 +365,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -379,7 +386,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -399,7 +406,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -420,7 +427,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -444,7 +451,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -465,7 +472,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -485,7 +492,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -504,7 +511,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
     }
 };
@@ -522,7 +529,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
     }
 };
@@ -546,7 +553,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -567,7 +574,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -588,7 +595,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         write32(bytes, val);
     }
@@ -609,7 +616,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         bytes.push_back(shamt);
     }
@@ -630,7 +637,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
         bytes.push_back(shamt);
     }
@@ -653,7 +660,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
     }
 };
@@ -671,7 +678,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         write32(bytes, val);
     }
 };
@@ -689,7 +696,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
     }
 };
@@ -707,7 +714,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         write16(bytes, size);
     }
 };
@@ -722,7 +729,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
     }
 };
 
@@ -743,7 +750,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         emitImm32(addr);
     }
 };
@@ -761,7 +768,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         emitImm32(addr);
     }
 };
@@ -779,7 +786,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         emitImm32(addr);
     }
 };
@@ -797,7 +804,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         emitImm32(addr);
     }
 };
@@ -815,7 +822,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         emitImm32(addr);
     }
 };
@@ -837,7 +844,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         emitImm32(addr);
     }
 };
@@ -855,7 +862,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         emitImm32(addr);
     }
 };
@@ -870,7 +877,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
     }
 };
 
@@ -892,7 +899,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(dest);
         bytes.push_back(src);
     }
@@ -911,7 +918,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
         bytes.push_back(reg);
     }
 };
@@ -926,7 +933,7 @@ public:
     void
     emit() override
     {
-        bytes.push_back(static_cast<uint8_t>(opcode));
+        emitOpcode();
     }
 };
 
@@ -1019,22 +1026,22 @@ parseStringBytes(const std::string & s, std::vector<uint8_t> & out, std::string 
             char e = s[++i];
             switch (e) {
             case 'n':
-                out.push_back(0x0A);
+                out.push_back(static_cast<uint8_t>('\n'));
                 break;
             case 't':
-                out.push_back(0x09);
+                out.push_back(static_cast<uint8_t>('\t'));
                 break;
             case 'r':
-                out.push_back(0x0D);
+                out.push_back(static_cast<uint8_t>('\r'));
                 break;
             case '0':
                 out.push_back(0x00);
                 break;
             case '\\':
-                out.push_back(0x5C);
+                out.push_back(static_cast<uint8_t>('\\'));
                 break;
             case '"':
-                out.push_back(0x22);
+                out.push_back(static_cast<uint8_t>('"'));
                 break;
             default:
                 err = std::string("未知转义序列 '\\") + e + "'";
@@ -1095,6 +1102,9 @@ splitDataItems(const std::string & args, std::string & err)
 // Parser
 // ============================================================================
 
+// 单行汇编 → 指令对象；空行/注释行与未知指令均返回 nullptr。
+// 地址类操作数非纯数字时记为 pendingLabel（待 assemble 第二遍回填）：
+// callx 符号标记 patchFromImports（地址取自导入表），其余取自本模块标号表
 std::unique_ptr<Instruction>
 Assembler::parseLine(const std::string & line)
 {
@@ -1327,7 +1337,25 @@ namespace
         appendPad(c, pad);
     }
 
+    // 按名查找导入记录；未命中返回 nullptr
+    const ImportRec *
+    findImport(const std::vector<ImportRec> & imports, const std::string & name)
+    {
+        for (const auto & im : imports)
+            if (im.name == name)
+                return &im;
+        return nullptr;
+    }
+
 } // namespace
+
+// 回填 4 字节小端立即数到 bytes[offset..offset+4)（调用方须保证偏移合法）
+static void
+patchI32(std::vector<uint8_t> & bytes, int32_t offset, int32_t value)
+{
+    for (int k = 0; k < 4; ++k)
+        bytes[offset + k] = static_cast<uint8_t>((value >> (8 * k)) & 0xFF);
+}
 
 AssemblyResult
 Assembler::assemble(const std::string & source)
@@ -1623,12 +1651,7 @@ Assembler::assemble(const std::string & source)
             continue;
         int32_t value = 0;
         if (ins->patchFromImports) {
-            const ImportRec * im = nullptr;
-            for (const auto & i2 : imports)
-                if (i2.name == ins->pendingLabel) {
-                    im = &i2;
-                    break;
-                }
+            const ImportRec * im = findImport(imports, ins->pendingLabel);
             if (!im) {
                 fail(ins->sourceLine,
                      "callx 引用了未声明的外部符号 '" + ins->pendingLabel
@@ -1647,11 +1670,7 @@ Assembler::assemble(const std::string & source)
                 const ImportRec * ext = nullptr;
                 if (ins->opcode == NOpcode::ST || ins->opcode == NOpcode::LEA
                     || ins->opcode == NOpcode::LOADA || ins->opcode == NOpcode::STOREA) {
-                    for (const auto & i2 : imports)
-                        if (i2.name == ins->pendingLabel) {
-                            ext = &i2;
-                            break;
-                        }
+                    ext = findImport(imports, ins->pendingLabel);
                 }
                 if (!ext) {
                     fail(ins->sourceLine, "未定义的标号 '" + ins->pendingLabel + "'");
@@ -1665,9 +1684,7 @@ Assembler::assemble(const std::string & source)
             fail(ins->sourceLine, "内部错误：回填偏移越界");
             return result;
         }
-        for (int k = 0; k < 4; ++k)
-            ins->bytes[ins->patchOffset + k] =
-              static_cast<uint8_t>((value >> (8 * k)) & 0xFF);
+        patchI32(ins->bytes, ins->patchOffset, value);
     }
 
     // dd 标号引用回填（可引用代码/数据标号做地址常量）
@@ -1678,15 +1695,13 @@ Assembler::assemble(const std::string & source)
             fail(ref.line, "dd 引用了未定义的标号 '" + ref.label + "'");
             return result;
         }
-        for (int k = 0; k < 4; ++k)
-            dataBytes[ref.offset + k] = static_cast<uint8_t>((value >> (8 * k)) & 0xFF);
+        patchI32(dataBytes, ref.offset, value);
     }
 
     // ---- 生成文件镜像 ----
     std::vector<uint8_t> & img = result.image;
-    const uint8_t magic[8] = { 'N', 'a', 'n', 'o', 'C', '\0', 0, 0 };
-    img.insert(img.end(), magic, magic + 8);
-    write32(img, 32); // headerSize
+    img.insert(img.end(), NCI_MAGIC, NCI_MAGIC + sizeof(NCI_MAGIC));
+    write32(img, NCI_HEADER_SIZE); // headerSize
     write32(img, codeSize);
     write32(img, dataSize);
     write32(img, static_cast<int32_t>(imports.size()));
@@ -1702,7 +1717,7 @@ Assembler::assemble(const std::string & source)
         appendNameField(img, im.name);
         write32(img, im.address);
         write32(img,
-                static_cast<int32_t>(im.convention & 0x03)
+                static_cast<int32_t>(im.convention & CONVENTION_FLAGS_MASK)
                   | (im.dynamic ? IMPORT_FLAG_DYNAMIC : 0));
     }
     // 导出表：与导入表同构，addr = 标号统一编址地址，flags 恒 0

@@ -9,29 +9,64 @@
 #include <dlfcn.h>
 #endif
 
-// 小端 32 位读取（memcpy 实现避免对齐问题）
-static int32_t
-readI32(const int8_t * data, int64_t offset)
+namespace
 {
-    int32_t v;
-    memcpy(&v, data + offset, sizeof(v));
-    return v;
-}
+    // NCI v2.1 头字段偏移（规范 §2；头尺寸常量 NCI_V21_HEADER_SIZE 在 core.hpp）
+    constexpr int64_t OFF_HEADER_SIZE = 8;
+    constexpr int64_t OFF_CODE_SIZE = 12;
+    constexpr int64_t OFF_DATA_SIZE = 16;
+    constexpr int64_t OFF_IMPORT_COUNT = 20;
+    constexpr int64_t OFF_EXPORT_COUNT = 24;
+    constexpr int64_t OFF_ENTRY_POINT = 28;
+    // 符号表 entry 尾部定长字段：addr@+0、flags@+4（共 8 字节）
+    constexpr int64_t SYM_TRAILER_SIZE = 8;
+    // opcode 分发表覆盖 uint8 全域
+    constexpr int OPCODE_SPACE_SIZE = 256;
+
+    // 解析一张符号表 entry：int32 nameLen + name + NUL + pad4（entry 起始基准）
+    // + addr + flags（规范 §2.1）。导入/导出表同构，tableName 仅用于错误消息
+    // （"import"/"export"）；截断或非法即抛 std::runtime_error
+    void
+    readSymbolEntry(const int8_t * data,
+                    int64_t fileSize,
+                    int64_t & off,
+                    const char * tableName,
+                    std::string & name,
+                    int32_t & addr,
+                    int32_t & flags)
+    {
+        if (off + 4 > fileSize)
+            throw std::runtime_error(std::string("NCI v2.1: truncated ") + tableName
+                                     + " table");
+        int32_t nameLen = readI32(data, off);
+        if (nameLen < 0 || off + 4 + (int64_t)nameLen + 1 > fileSize)
+            throw std::runtime_error(std::string("NCI v2.1: bad ") + tableName
+                                     + " symbol name");
+        name.assign((const char *)&data[off + 4], nameLen);
+        int64_t fixed = ((int64_t)4 + nameLen + 1 + 3) & ~(int64_t)3;
+        if (off + fixed + SYM_TRAILER_SIZE > fileSize)
+            throw std::runtime_error(std::string("NCI v2.1: truncated ") + tableName
+                                     + " entry");
+        addr = readI32(data, off + fixed);
+        flags = readI32(data, off + fixed + 4);
+        off += fixed + SYM_TRAILER_SIZE;
+    }
+} // namespace
 
 NVirtualMachine::NVirtualMachine(int32_t stackSize)
-  : m_sp(m_registers[4])
-  , m_bp(m_registers[5])
+  : m_sp(m_registers[SP_REGISTER_INDEX])
+  , m_bp(m_registers[BP_REGISTER_INDEX])
 {
     m_stack = (int8_t *)malloc(stackSize);
     m_stackSize = stackSize;
     m_codeSize = 0;
     m_dataSize = 0;
     m_ax = m_bp = m_flags = m_pc = 0;
-    m_code = NULL;
+    m_code = nullptr;
     m_nextHostAddr = HOST_ADDRESS_BASE;
     // m_sp/m_bp 是 m_registers[4]/[5] 的引用别名，须先清零寄存器，
     // 再通过引用写入 SP 初始值（栈从高地址向低地址生长）
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < REGISTER_COUNT; i++)
         m_registers[i] = 0;
     m_sp = stackSize;
 }
@@ -43,7 +78,8 @@ NVirtualMachine::load(std::string filename)
 {
     FILE * pf = fopen(filename.c_str(), "rb");
     if (!pf) {
-        printf("Error: Cannot open %s\n", filename.c_str());
+        // 进程级致命 I/O 错误：不经异常通道，报 stderr 后退出（CLI 错误流约定）
+        fprintf(stderr, "Error: Cannot open %s\n", filename.c_str());
         exit(1);
     }
     fseek(pf, 0, SEEK_END);
@@ -52,7 +88,9 @@ NVirtualMachine::load(std::string filename)
     fseek(pf, 0, SEEK_SET);
     fread(data, 1, size, pf);
     fclose(pf);
-    if (size >= 32 && memcmp(data, "NanoC", 5) == 0) {
+    // 格式嗅探：仅按前 5 字节 "NanoC" 宽松判定（v2.1 的 8 字节魔数与头字段
+    // 严格校验在 loadV21 内做）；不匹配则按旧裸格式整文件当代码执行
+    if (size >= NCI_V21_HEADER_SIZE && memcmp(data, "NanoC", sizeof("NanoC") - 1) == 0) {
         // 严格 v2.1 路径：校验失败抛异常（不污染 VM 状态）
         try {
             loadV21(data, size);
@@ -62,79 +100,55 @@ NVirtualMachine::load(std::string filename)
             throw;
         }
         free(data);
-        data = NULL;
+        data = nullptr;
     }
     else {
         // 旧裸格式 fallback：整文件当代码
         m_codeSize = size;
         m_code = data;
         m_pc = 0;
-        data = NULL;
+        data = nullptr;
     }
-    if (data)
-        free(data);
 }
 
 // 严格 v2.1 加载：header(32B) | code | data | import table | export table
 void
 NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
 {
-    if (memcmp(data, "NanoC\0\0\0", 8) != 0)
+    if (memcmp(data, NCI_V21_MAGIC, sizeof(NCI_V21_MAGIC)) != 0)
         throw std::runtime_error("NCI v2.1: bad magic (expect \"NanoC\\0\\0\\0\")");
-    int32_t headerSize = readI32(data, 8);
-    if (headerSize != 32)
+    int32_t headerSize = readI32(data, OFF_HEADER_SIZE);
+    if (headerSize != NCI_V21_HEADER_SIZE)
         throw std::runtime_error("NCI v2.1: unsupported headerSize "
                                  + std::to_string(headerSize) + " (expect 32)");
-    int32_t codeSize = readI32(data, 12);
-    int32_t dataSize = readI32(data, 16);
-    int32_t importCount = readI32(data, 20);
-    int32_t exportCount = readI32(data, 24);
-    int32_t entryPoint = readI32(data, 28);
+    int32_t codeSize = readI32(data, OFF_CODE_SIZE);
+    int32_t dataSize = readI32(data, OFF_DATA_SIZE);
+    int32_t importCount = readI32(data, OFF_IMPORT_COUNT);
+    int32_t exportCount = readI32(data, OFF_EXPORT_COUNT);
+    int32_t entryPoint = readI32(data, OFF_ENTRY_POINT);
     if (codeSize < 0 || dataSize < 0 || importCount < 0 || exportCount < 0)
         throw std::runtime_error("NCI v2.1: negative segment/table size in header");
-    if ((int64_t)32 + codeSize + dataSize > fileSize)
+    if ((int64_t)NCI_V21_HEADER_SIZE + codeSize + dataSize > fileSize)
         throw std::runtime_error("NCI v2.1: code/data size exceeds file size");
     if (entryPoint < 0 || entryPoint > codeSize)
         throw std::runtime_error("NCI v2.1: entryPoint out of code segment");
 
     // 导入表：int32 nameLen + name + NUL + pad 到 4 字节对齐（以 entry 起始为基准）+ addr
     // + flags
-    int64_t off = 32 + (int64_t)codeSize + dataSize;
+    int64_t off = NCI_V21_HEADER_SIZE + (int64_t)codeSize + dataSize;
     std::vector<NImportSymbol> imports;
     for (int32_t i = 0; i < importCount; i++) {
-        if (off + 4 > fileSize)
-            throw std::runtime_error("NCI v2.1: truncated import table");
-        int32_t nameLen = readI32(data, off);
-        if (nameLen < 0 || off + 4 + (int64_t)nameLen + 1 > fileSize)
-            throw std::runtime_error("NCI v2.1: bad import symbol name");
         NImportSymbol sym;
-        sym.name.assign((const char *)&data[off + 4], nameLen);
-        int64_t fixed = ((int64_t)4 + nameLen + 1 + 3) & ~(int64_t)3;
-        if (off + fixed + 8 > fileSize)
-            throw std::runtime_error("NCI v2.1: truncated import entry");
-        sym.addr = readI32(data, off + fixed);
-        sym.flags = readI32(data, off + fixed + 4);
+        readSymbolEntry(data, fileSize, off, "import", sym.name, sym.addr, sym.flags);
         imports.push_back(sym);
-        off += fixed + 8;
     }
 
     // 导出表：同构，addr=代码段地址，flags 恒 0
     std::vector<NExportSymbol> exports;
     for (int32_t i = 0; i < exportCount; i++) {
-        if (off + 4 > fileSize)
-            throw std::runtime_error("NCI v2.1: truncated export table");
-        int32_t nameLen = readI32(data, off);
-        if (nameLen < 0 || off + 4 + (int64_t)nameLen + 1 > fileSize)
-            throw std::runtime_error("NCI v2.1: bad export symbol name");
         NExportSymbol sym;
-        sym.name.assign((const char *)&data[off + 4], nameLen);
-        int64_t fixed = ((int64_t)4 + nameLen + 1 + 3) & ~(int64_t)3;
-        if (off + fixed + 8 > fileSize)
-            throw std::runtime_error("NCI v2.1: truncated export entry");
-        sym.addr = readI32(data, off + fixed);
-        sym.flags = readI32(data, off + fixed + 4);
+        readSymbolEntry(data, fileSize, off, "export", sym.name, sym.addr, sym.flags);
         exports.push_back(sym);
-        off += fixed + 8;
     }
 
     // 全部校验通过后再提交，避免异常路径污染 VM 状态。
@@ -142,18 +156,24 @@ NVirtualMachine::loadV21(const int8_t * data, int64_t fileSize)
     if ((int64_t)codeSize + dataSize > m_stackSize)
         throw std::runtime_error("NCI v2.1: data segment does not fit into memory");
     int8_t * newCode = (int8_t *)malloc(codeSize > 0 ? codeSize : 1);
-    memcpy(newCode, data + 32, codeSize);
+    memcpy(newCode, data + NCI_V21_HEADER_SIZE, codeSize);
     free(m_code);
     m_code = newCode;
     m_codeSize = codeSize;
     m_dataSize = dataSize;
-    memcpy(m_stack + codeSize, data + 32 + codeSize, dataSize);
+    memcpy(m_stack + codeSize, data + NCI_V21_HEADER_SIZE + codeSize, dataSize);
     m_imports = std::move(imports);
     m_exports = std::move(exports);
     m_pc = entryPoint;
 }
 
 // ==== 宿主库函数注册与动态链接 ====
+//
+// 宿主地址分配策略：地址空间与代码/数据段隔离，从 HOST_ADDRESS_BASE 起
+// 线性递增（internHostSymbol）；静态绑定的显式地址与 nas 分配的伪宿主地址
+// 原位登记（bindHostSymbol）。按名表 m_hostAddrByName 保证同一符号跨解析
+// 路径（registerHostFunction / loadHostLibrary / resolveImportsByName）
+// 只登记一次、地址一致
 
 void
 NVirtualMachine::registerHostFunction(int32_t addr, NHostFunction fn)
@@ -448,13 +468,20 @@ NVirtualMachine::loadHostLibrary(const std::string & path)
     return ok;
 }
 
+// 主执行循环。
+//   分发表：下标 = opcode（NCI v2.1 规范 §3.1；权威枚举为
+//   nas/src/nas/instruction.hpp 的 NOpcode，nvm 侧按既有决策不重复定义，
+//   两侧取值一致性由字节级 e2e 测试钉死）。表项为空 = 保留操作码
+//   哨兵协议：执行前在栈底压入返回地址 = 代码段末尾（m_codeSize），main
+//   顶层的 leave/ret 弹出哨兵后 pc == m_codeSize，主循环自然终止（无 HLT）
+//   未知操作码：报错并停在原地（pc 不前进）
 void
 NVirtualMachine::start()
 {
     if (!m_code || !m_stack)
         return;
     typedef void (NVirtualMachine::*H)();
-    H h[256] = {};
+    H h[OPCODE_SPACE_SIZE] = {};
     h[0x00] = &NVirtualMachine::executeLMM;
     h[0x01] = &NVirtualMachine::executeST;
     h[0x02] = &NVirtualMachine::executeLEA;
@@ -504,15 +531,19 @@ NVirtualMachine::start()
     h[0x71] = &NVirtualMachine::executeCLR;
     h[0x7F] = &NVirtualMachine::executeNOP;
     // 栈底压入哨兵返回地址：main 顶层的 leave/ret 落到代码段末尾，循环自然结束
-    m_sp -= 4;
-    *(int32_t *)&m_stack[m_sp] = (int32_t)m_codeSize;
+    m_sp -= STACK_SLOT_SIZE;
+    memWrite32(m_stack, m_sp, (int32_t)m_codeSize);
 
     while (m_pc < m_codeSize) {
         uint8_t op = m_code[m_pc];
         if (h[op])
             (this->*h[op])();
         else {
-            printf("Unknown op 0x%02X at %d\n", op, m_pc);
+            // VM 运行时诊断走 stdout（与 CALLX 未解析等运行时报错一致，
+            // tests 以 CaptureStdout 钉死该约定）；格式对齐 "Error: " 前缀
+            printf("Error: unknown opcode 0x%02X at pc %d, execution stopped\n",
+                   op,
+                   m_pc);
             break;
         }
     }
@@ -527,19 +558,19 @@ NVirtualMachine::print_info()
 void
 NVirtualMachine::print_stack(int32_t s, int32_t e)
 {
-    for (int i = s; i < e; i += 4)
-        printf("[%04X]=%d\n", i, *(int32_t *)&m_stack[i]);
+    for (int i = s; i < e; i += STACK_SLOT_SIZE)
+        printf("[%04X]=%d\n", i, memRead32(m_stack, i));
 }
 
 int32_t
 NVirtualMachine::getRegister(int32_t i)
 {
-    return i < 8 ? m_registers[i] : 0;
+    return i < REGISTER_COUNT ? m_registers[i] : 0;
 }
 void
 NVirtualMachine::setRegister(int32_t i, int32_t v)
 {
-    if (i < 8)
+    if (i < REGISTER_COUNT)
         m_registers[i] = v;
 }
 int32_t

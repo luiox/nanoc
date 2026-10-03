@@ -4,12 +4,12 @@
 void
 NVirtualMachine::executeMOV()
 {
-    if (m_pc + 3 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG_REG <= m_codeSize) {
         uint8_t dest = m_code[m_pc + 1];
         uint8_t src = m_code[m_pc + 2];
-        if (dest < 8 && src < 8) {
+        if (dest < REGISTER_COUNT && src < REGISTER_COUNT) {
             m_registers[dest] = m_registers[src];
-            m_pc += 3;
+            m_pc += INSTR_LEN_REG_REG;
         }
     }
 }
@@ -17,11 +17,11 @@ NVirtualMachine::executeMOV()
 void
 NVirtualMachine::executeCLR()
 {
-    if (m_pc + 2 <= m_codeSize) {
+    if (m_pc + INSTR_LEN_REG <= m_codeSize) {
         uint8_t reg = m_code[m_pc + 1];
-        if (reg < 8) {
+        if (reg < REGISTER_COUNT) {
             m_registers[reg] = 0;
-            m_pc += 2;
+            m_pc += INSTR_LEN_REG;
         }
     }
 }
@@ -29,5 +29,5 @@ NVirtualMachine::executeCLR()
 void
 NVirtualMachine::executeNOP()
 {
-    m_pc += 1;
+    m_pc += INSTR_LEN_NONE;
 }
