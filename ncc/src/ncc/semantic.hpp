@@ -114,6 +114,10 @@ struct Symbol {
     bool isExtern = false;
     // 参数表带 ...（PRD R3，仅 extern 声明）：调用点实参数 ≥ 命名参数数即合法
     bool isVariadic = false;
+    // 头文件函数原型（PRD R9）：可与同名定义合并（C 原型语义——原型+定义
+    // 幂等、签名不兼容报 conflicting types）；未被定义覆盖的原型行为同
+    // extern（宿主外部符号）
+    bool isPrototype = false;
 };
 
 // 全局符号摘要（analyze 结果的一部分，供调用方与测试核对符号表内容）。
@@ -126,9 +130,10 @@ struct SymbolSummary {
     ca::collection::ArrayList<std::string> paramTypes; // 仅函数：参数类型可读名
     int line = 0;
     int column = 0;
-    std::string definedIn;   // 定义所在文件（空 = 单文件模式）
-    bool isExported = false; // export 标记（PRD R2a）
-    bool isExtern = false;   // extern 声明标记（PRD R3）
+    std::string definedIn;    // 定义所在文件（空 = 单文件模式）
+    bool isExported = false;  // export 标记（PRD R2a）
+    bool isExtern = false;    // extern 声明标记（PRD R3）
+    bool isPrototype = false; // 头文件原型标记（PRD R9；分析结束后未被定义覆盖的原型）
 };
 
 // 语义分析结果：全部诊断 + 全局符号表摘要
@@ -242,6 +247,10 @@ private:
     // 当前作用域登记变量；同名冲突（与变量或函数）报 redefinition 并返回 false
     bool declareVariable(const Symbol& symbol);
     bool declareFunction(const Symbol& symbol);
+    // 全局符号摘要补发（PRD R9）：原型登记时不立即产出摘要（定义可能在后续
+    // 声明中覆盖原型槽位），分析收尾对仍未覆盖的原型统一补发，保证一条全局
+    // 符号至多一条摘要
+    void flushPendingSummaries();
     void appendGlobalSummary(const Symbol& symbol);
 
     // ---- struct / typedef 登记（PRD R1.2 第二批） ----
@@ -349,6 +358,8 @@ private:
     // 顶层符号表（PRD R2a）：登记序槽位 + 展示名索引，见 declareGlobal 注释
     std::vector<Symbol> m_globalSymbols;
     std::map<std::string, std::vector<std::size_t>> m_globalByName;
+    // 摘要产出跟踪（与 m_globalSymbols 平行）：原型槽位在定义覆盖时才产出摘要
+    std::vector<char> m_summarized;
     std::string m_currentFile; // 当前检查的顶层声明所在文件（decl->sourceFile）
     // struct 布局表与 typedef 表：文件作用域单一类型命名空间（决策见类注释）
     std::map<std::string, StructInfo> m_structs;

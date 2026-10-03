@@ -150,9 +150,13 @@ public:
     int returnPointerDepth = 0;  // 返回类型指针层级（0=值，1=指针）
     std::string name;
     std::vector<std::unique_ptr<VarDeclaration>> parameters;
-    bool isExported = false;    // export 修饰的顶层函数（PRD R2a）
-    bool isExtern = false;      // extern 声明（PRD R3）：无函数体，符号由宿主提供
-    bool isVariadic = false;    // 参数表带 ...（仅 extern 声明，PRD R3）
+    bool isExported = false; // export 修饰的顶层函数（PRD R2a）
+    bool isExtern = false;   // extern 声明（PRD R3）：无函数体，符号由宿主提供
+    bool isVariadic = false; // 参数表带 ...（仅 extern 声明，PRD R3）
+    // 头文件函数原型（PRD R9）：`int add(int a, int b);`，无函数体。语义层
+    // 可与同名定义合并（C 原型语义：原型+定义幂等）；未被定义的原型与 extern
+    // 同路径（callx 宿主外部符号），但与 extern 的重复声明冲突规则相互独立
+    bool isPrototype = false;
     std::unique_ptr<Stmt> body; // extern 声明为 nullptr
 
     FuncDeclaration(const std::string& rt, const std::string& n, int l, int c)

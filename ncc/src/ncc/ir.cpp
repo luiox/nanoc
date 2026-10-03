@@ -3,6 +3,7 @@
 #include "ncc/ast.hpp"
 
 #include <map>
+#include <set>
 #include <sstream>
 #include <utility>
 
@@ -353,8 +354,9 @@ namespace ir {
                 for (const auto& decl : program.declarations) {
                     if (decl->type == ASTNodeType::FUNC_DECLARATION) {
                         const auto& func = static_cast<const FuncDeclaration&>(*decl);
-                        // extern 声明无函数体（PRD R3）：合法形态，不查 body
-                        if (func.isExtern) {
+                        // extern 声明（PRD R3）与头文件原型（PRD R9）无函数体：
+                        // 合法形态，不查 body
+                        if (func.isExtern || func.isPrototype) {
                             continue;
                         }
                         if (func.body == nullptr
@@ -374,7 +376,11 @@ namespace ir {
                     }
                 }
 
-                // 第一遍之二：函数签名先统一登记（返回类型供调用点判型）
+                // 第一遍之二：函数签名先统一登记（返回类型供调用点判型）。
+                // 同步收集本单元有定义的函数名：头文件原型（PRD R9）与同名
+                // 定义合并后不再进 externs（否则产物同时出现定义标号与同名
+                // extern 导入，nas 冲突）
+                std::set<std::string> definedFunctionNames;
                 for (const auto& decl : program.declarations) {
                     if (decl->type == ASTNodeType::FUNC_DECLARATION) {
                         const auto& func = static_cast<const FuncDeclaration&>(*decl);
@@ -384,6 +390,9 @@ namespace ir {
                                           func.returnPointerDepth,
                                           false,
                                           0);
+                        if (!func.isExtern && !func.isPrototype) {
+                            definedFunctionNames.insert(func.name);
+                        }
                     }
                 }
 
@@ -393,9 +402,13 @@ namespace ir {
                 for (const auto& decl : program.declarations) {
                     if (decl->type == ASTNodeType::FUNC_DECLARATION) {
                         const auto& func = static_cast<const FuncDeclaration&>(*decl);
-                        // extern 声明（PRD R3）：只收集签名，不进入 functions；
-                        // 同名去重（多文件重复 extern 幂等）
-                        if (func.isExtern) {
+                        // extern 声明（PRD R3）与头文件原型（PRD R9）：只收集
+                        // 签名，不进入 functions；同名去重（多文件重复 extern
+                        // 幂等）；已被本单元定义覆盖的原型跳过（调用点绑定定义）
+                        if (func.isExtern || func.isPrototype) {
+                            if (definedFunctionNames.count(func.name) > 0) {
+                                continue;
+                            }
                             bool seen = false;
                             for (const auto& existing : m_module.externs) {
                                 if (existing.name == func.name) {

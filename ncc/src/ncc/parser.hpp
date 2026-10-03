@@ -37,10 +37,20 @@ private:
 class Parser {
 public:
     // fileName 可选：非空时解析错误带文件前缀（多文件装载用），诊断可定位到文件
-    Parser(const std::vector<Token>& tokens, std::string fileName = "");
+    // externalTypedefNames：单元级已知 typedef 别名（PRD R9 装载器线程：头文件
+    // 先于包含者解析，其别名注入后续文件，跨文件 `PointT p;` 才能按类型解析）
+    Parser(const std::vector<Token>& tokens,
+           std::string fileName = "",
+           const std::set<std::string>& externalTypedefNames = {});
 
     // 解析程序
     std::unique_ptr<Program> parse();
+
+    // 头文件模式（PRD R9）：接受 C 声明子集扩展——函数原型（无函数体）、
+    // 限定符/修饰符链（const/volatile/static/inline/register/unsigned/signed/
+    // long/short，语义忽略）、(void) 空参表、数组形参退化。语言本体（.nc）
+    // 不受影响（默认关闭）
+    void setHeaderMode(bool headerMode) { m_headerMode = headerMode; }
 
 private:
     std::vector<Token> m_tokens;
@@ -48,6 +58,7 @@ private:
     std::string m_fileName;               // 可选文件名（诊断前缀）
     int m_anonCounter = 0;                // 匿名 struct 内部标签计数（__anon_N）
     std::set<std::string> m_typedefNames; // 已解析的 typedef 别名（文件作用域）
+    bool m_headerMode = false;            // 头文件模式（PRD R9 声明子集扩展）
 
     // 辅助函数
     Token currentToken() const;
@@ -68,6 +79,10 @@ private:
     // extern 声明（PRD R3）：`extern int puts(char* s);`，仅限文件作用域；
     // 函数体位置必须是 ';'，参数表尾部可带 ...
     std::unique_ptr<FuncDeclaration> parseExternDeclaration();
+    // 头文件函数原型（PRD R9）：`int add(int a, int b);`，与 extern 声明同构
+    // （isPrototype 标记、无函数体）；支持 `(void)` 空参表、无名形参、数组形参
+    // 退化（C 语义）、varargs `...`
+    std::unique_ptr<FuncDeclaration> parsePrototypeDeclaration();
     std::unique_ptr<Decl> parseTypedefDeclaration();
     std::unique_ptr<StructDeclaration>
     parseStructBody(const std::string& tag, int line, int column);
@@ -86,6 +101,16 @@ private:
     std::string parseTypePrefix(bool& isStructTag, int& line, int& column);
     // 声明初始化：`{ e1, e2 }` → InitListExpr，否则普通表达式
     std::unique_ptr<Expr> parseInitializer();
+
+    // ---- R9 头文件模式辅助 ----
+    // 消费 C 限定符/修饰符链（const/volatile/static/inline/register 与
+    // unsigned/signed/long/short，语义忽略——决策记录见实现注释）。返回是否
+    // 消费了 unsigned/signed/long/short（裸修饰符按 int 解释）
+    bool skipHeaderQualifiers();
+    // 当前 token 是否开始一个类型（builtin/struct/typedef 别名）
+    bool isTypeStart() const;
+    // 头文件原型形态判定：从 '(' 起扫描 `(...)` 是否后随 ';'（仅词法形态）
+    bool isPrototypeForm(std::size_t lparenPos) const;
 
     // 表达式解析
     std::unique_ptr<Expr> parseExpression();
