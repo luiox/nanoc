@@ -2,6 +2,7 @@
 #include "ncc/codegen.hpp"
 #include "ncc/ir.hpp"
 #include "ncc/lexer.hpp"
+#include "ncc/llvm_backend.hpp"
 #include "ncc/loader.hpp"
 #include "ncc/parser.hpp"
 #include "ncc/semantic.hpp"
@@ -40,7 +41,8 @@ namespace {
         emit.kind = ca::opt::OptKind::String;
         emit.default_value = "asm";
         emit.metavar = "<kind>";
-        emit.help = "output kind: asm|c; llvm/obj/exe reserved";
+        emit.help = "output kind: asm|c|llvm|obj|exe (llvm = textual LLVM IR; "
+                    "obj/exe need the LLVM toolchain, see NANOC_LLVM_DIR)";
 
         ca::opt::Arg mmd;
         mmd.name = "MMD";
@@ -145,9 +147,10 @@ int main(int argc, char* argv[]) {
     }
 
     const std::string emit_kind = options.get("emit");
-    if (emit_kind != "asm" && emit_kind != "c") {
+    if (emit_kind != "asm" && emit_kind != "c" && emit_kind != "llvm"
+        && emit_kind != "obj" && emit_kind != "exe") {
         std::cerr << "ncc: error: --emit=" << emit_kind
-                  << " is not supported yet (available: asm, c)\n";
+                  << " is not supported (available: asm, c, llvm, obj, exe)\n";
         return 1;
     }
 
@@ -222,6 +225,53 @@ int main(int argc, char* argv[]) {
                     dep_path = replace_extension(c_out_path, ".d");
                 }
                 if (!write_file(dep_path, make_depfile(c_out_path, loaded.loadOrder))) {
+                    return 1;
+                }
+            }
+            return 0;
+        }
+
+        // --emit=llvm|obj|exe（PRD R6）：IR → LLVM 文本 IR；obj/exe 走
+        // llc（+ lld-link/clang 链接）。工具链探测与报错口径见
+        // llvm_backend.hpp；错误处理与 --emit=c/asm 一致：编译错误退出非 0
+        if (emit_kind == "llvm" || emit_kind == "obj" || emit_kind == "exe") {
+            std::string llSource;
+            try {
+                llSource = llvm_backend::emit(module);
+            } catch (const std::exception& e) {
+                std::cerr << "ncc: error: " << e.what() << "\n";
+                return 1;
+            }
+
+            const char* outExt =
+              emit_kind == "llvm" ? ".ll" : (emit_kind == "obj" ? ".obj" : ".exe");
+            std::string out_path = options.get("output");
+            if (out_path.empty()) {
+                out_path = replace_extension(inputs.front(), outExt);
+            }
+
+            if (emit_kind == "llvm") {
+                if (!write_file(out_path, llSource)) {
+                    return 1;
+                }
+            } else {
+                std::string diagnostics;
+                const bool ok =
+                  emit_kind == "obj"
+                    ? llvm_backend::compileToObj(llSource, out_path, diagnostics)
+                    : llvm_backend::compileToExe(llSource, out_path, diagnostics);
+                if (!ok) {
+                    std::cerr << "ncc: error: " << diagnostics << "\n";
+                    return 1;
+                }
+            }
+
+            if (options.has("MMD")) {
+                std::string dep_path = options.get("MF");
+                if (dep_path.empty()) {
+                    dep_path = replace_extension(out_path, ".d");
+                }
+                if (!write_file(dep_path, make_depfile(out_path, loaded.loadOrder))) {
                     return 1;
                 }
             }
