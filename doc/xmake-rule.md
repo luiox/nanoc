@@ -90,10 +90,10 @@ xmake 从当前目录**向上**查找工程文件时总是取**最顶层**的 `x
    重跑 ncc（整体编译模型本身如此，ncc 开销可忽略）。
 4. **C 编译选项**：生成的 `.c` 走目标的内置 C 规则，`add_cflags`/
    `add_includedirs`/`add_links` 等照常生效于生成代码的编译。
-5. **与未来 `toolchain("nanoc")`（R8）的关系**：rule 面向一期整体编译
-   （`set_kind("binary")` + 复用 C 工具链）；R8 后 `set_toolchains("nanoc")`
-   面向正式形态（按文件产 obj、VM 目标链接）。二者并存，选择指南届时在
-   `doc/xmake-rule.md` 更新。
+5. **与 `toolchain("nanoc")`（R8）的关系**：rule 面向一期整体编译
+   （`set_kind("binary")` + 复用 C 工具链）；`set_toolchains("nanoc")`
+   面向正式形态（按文件产 obj、目标级 C 链接、文件级增量）。二者并存，
+   选择指南见 [`doc/xmake-toolchain.md`](xmake-toolchain.md)。
 6. **CI**：规则不进主工程 CI 路径——根 `xmake.lua` 未 glob
    `examples/hello_project/**`，主工程构建/测试不受影响。
 
