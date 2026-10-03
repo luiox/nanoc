@@ -1,6 +1,7 @@
 #include "ncc/codegen.hpp"
 #include "ncc/lexer.hpp"
 #include "ncc/parser.hpp"
+#include "ncc/semantic.hpp"
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -169,6 +170,26 @@ int main(int argc, char* argv[]) {
         const std::vector<Token> tokens = lexer.tokenize();
         Parser program_parser(tokens);
         std::unique_ptr<Program> program = program_parser.parse();
+
+        // 语义分析（PRD R1.1/R1.2）：先收集全部诊断，有 error 则输出并退出非 0，
+        // 无诊断才进入代码生成
+        SemanticAnalyzer analyzer(inputs.front());
+        auto analyzed = analyzer.analyze(*program);
+        if (analyzed.is_err()) {
+            std::cerr << "ncc: error: " << analyzed.unwrap_err() << "\n";
+            return 1;
+        }
+        bool hasErrors = false;
+        for (const auto& diagnostic : analyzed.unwrap().diagnostics) {
+            if (diagnostic.severity == DiagnosticSeverity::Error) {
+                hasErrors = true;
+            }
+            print_text(std::cerr, diagnostic.toString());
+        }
+        if (hasErrors) {
+            return 1;
+        }
+
         CodeGenerator codegen;
         assembly = codegen.generate(*program);
     } catch (const std::exception& e) {
