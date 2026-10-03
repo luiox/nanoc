@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup xmake
+        uses: xmake-io/github-action-setup-xmake@v1.2.5
+        with:
+          xmake-version: latest
+
+      - name: Configure
+        run: xmake f -p windows -a x64 -m release -y
+
+      - name: Build
+        run: xmake -y
+
+      - name: Run tests
+        run: xmake run tests
