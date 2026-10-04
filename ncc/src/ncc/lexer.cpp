@@ -118,6 +118,22 @@ Token Lexer::readNumber() {
         advance();
     }
 
+    // 整型字面量范围检查（规范 §2.5）：字面量必须可由 32 位有符号整数表示；
+    // 负值是字面量前的一元 `-`（不属于字面量的一部分），故字面量本身上限为
+    // 2147483647，越界为编译期错误。在词法层先行范围检查（去掉前导零后，等长
+    // 十进制串的字典序比较等价于数值比较），越界串不再流向下游的 std::stoi，
+    // 避免诊断透出 "stoi argument out of range" 等内部异常消息
+    const std::size_t firstSignificant = value.find_first_not_of('0');
+    const std::string digits =
+      (firstSignificant == std::string::npos) ? "0" : value.substr(firstSignificant);
+    if (digits.size() > 10 || (digits.size() == 10 && digits > "2147483647")) {
+        throw std::runtime_error("integer literal '" + value
+                                 + "' out of range for 32-bit signed integer at line "
+                                 + std::to_string(startLine) + ", column "
+                                 + std::to_string(startColumn)
+                                 + " (valid literal range is 0..2147483647)");
+    }
+
     return Token(NTokenKind::INTEGER_CONSTANT, value, startLine, startColumn);
 }
 

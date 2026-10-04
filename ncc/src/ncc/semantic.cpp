@@ -248,6 +248,9 @@ const Symbol* SemanticAnalyzer::lookupSymbol(const std::string& name) const {
 // ---- 顶层符号表（PRD R2a 多文件可见性）----
 
 bool SemanticAnalyzer::declareGlobal(const Symbol& symbol) {
+    if (!checkReservedUnderscore(symbol.name, symbol.line, symbol.column)) {
+        return false;
+    }
     std::vector<std::size_t>& slots = m_globalByName[symbol.name];
     for (const std::size_t index : slots) {
         Symbol& existing = m_globalSymbols[index];
@@ -362,7 +365,27 @@ std::string SemanticAnalyzer::hiddenGlobalHint(const std::string& name) const {
     return "";
 }
 
+// 保留名检查（规范 §2.3/§6.2）：`_` 经标识符通道词法化，但仅作 match 通配
+// 模式的保留拼写；一切声明位置（全局/局部变量、函数参数、函数名、struct 成员、
+// typedef 名）出现名为 `_` 的声明均报语义错误。声明登记入口（declareGlobal/
+// declareVariable 与 struct/typedef 登记）统一调用本函数，避免逐检查点散落
+bool SemanticAnalyzer::checkReservedUnderscore(const std::string& name,
+                                               int line,
+                                               int column) {
+    if (name != "_") {
+        return true;
+    }
+    reportError(line,
+                column,
+                "'_' is reserved for the match wildcard pattern and cannot be "
+                "used as a declared name");
+    return false;
+}
+
 bool SemanticAnalyzer::declareVariable(const Symbol& symbol) {
+    if (!checkReservedUnderscore(symbol.name, symbol.line, symbol.column)) {
+        return false;
+    }
     Scope& scope = currentScope();
     if (scope.variables.contains_key(symbol.name)
         || scope.functions.contains_key(symbol.name)) {
@@ -478,7 +501,11 @@ void SemanticAnalyzer::registerStructDeclaration(const StructDeclaration& decl) 
                           + "'");
         }
 
-        if (!seenMembers.insert(field->name).second) {
+        // `_` 保留名检查与重复成员检查并列；命中保留名时仍登记占位（与已报错
+        // 字段同口径），编译以错误终止
+        const bool reservedName =
+          !checkReservedUnderscore(field->name, field->line, field->column);
+        if (!reservedName && !seenMembers.insert(field->name).second) {
             reportError(field->line,
                         field->column,
                         "duplicate member '" + field->name + "' in 'struct " + decl.tag
@@ -526,6 +553,11 @@ void SemanticAnalyzer::registerTypedefDeclaration(const TypedefDeclaration& decl
     // 内联 struct 定义先登记（typedef struct { ... } Alias;）
     if (decl.structDef) {
         registerStructDeclaration(*decl.structDef);
+    }
+
+    // `_` 为 match 通配保留拼写，不得用作 typedef 别名
+    if (!checkReservedUnderscore(decl.alias, decl.line, decl.column)) {
+        return;
     }
 
     SemanticType resolved = declaredType(decl.baseType,
