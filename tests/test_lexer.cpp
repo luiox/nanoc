@@ -90,6 +90,63 @@ TEST(LexerTest, IntegerConstants) {
     EXPECT_EQ(tokens[2].value, "456789");
 }
 
+// 整型字面量边界（规范 §2.5）：2147483647 合法；前导零不改变数值，仍合法
+TEST(LexerTest, IntegerLiteralBoundaryLegal) {
+    std::string source = "2147483647 007 0";
+    Lexer lexer(source);
+
+    std::vector<Token> tokens = lexer.tokenize();
+
+    ASSERT_EQ(tokens.size(), 4); // 3 个整数 + 1 个 EOF
+
+    EXPECT_EQ(tokens[0].kind, NTokenKind::INTEGER_CONSTANT);
+    EXPECT_EQ(tokens[0].value, "2147483647");
+
+    EXPECT_EQ(tokens[1].kind, NTokenKind::INTEGER_CONSTANT);
+    EXPECT_EQ(tokens[1].value, "007");
+
+    EXPECT_EQ(tokens[2].kind, NTokenKind::INTEGER_CONSTANT);
+    EXPECT_EQ(tokens[2].value, "0");
+}
+
+// 整型字面量越界（规范 §2.5）：2147483648 及以上为编译期错误（负值是字面量前
+// 的一元 `-`，不属于字面量，`-2147483648` 不构成例外）；诊断面向用户，携带
+// 行:列与字面量原文，不得透出 std::stoi 的内部异常消息
+TEST(LexerTest, IntegerLiteralOutOfRange) {
+    struct OutOfRangeCase {
+        const char* source;
+        int line;
+        int column;
+    };
+    const OutOfRangeCase cases[] = {
+        { "2147483648", 1, 1 },            // 边界 +1
+        { "99999999999", 1, 1 },           // 远超上限
+        { "00002147483648", 1, 1 },        // 前导零不改变数值，仍越界
+        { "0\n  2147483648", 2, 3 },       // 位置按字面量起始行:列
+        { "int d = -2147483648;", 1, 10 }, // 一元 `-` 不豁免字面量越界
+    };
+    for (const OutOfRangeCase& testCase : cases) {
+        SCOPED_TRACE(testCase.source);
+        Lexer lexer(testCase.source);
+        try {
+            lexer.tokenize();
+            ADD_FAILURE() << "expected out-of-range error for: " << testCase.source;
+        } catch (const std::exception& e) {
+            const std::string message = e.what();
+            EXPECT_NE(message.find("out of range for 32-bit signed integer"),
+                      std::string::npos)
+              << message;
+            EXPECT_EQ(message.find("stoi"), std::string::npos) << message;
+            EXPECT_NE(message.find("line " + std::to_string(testCase.line)),
+                      std::string::npos)
+              << message;
+            EXPECT_NE(message.find("column " + std::to_string(testCase.column)),
+                      std::string::npos)
+              << message;
+        }
+    }
+}
+
 // 测试字符常量识别
 TEST(LexerTest, CharConstants) {
     std::string source = "'a' 'Z' '0'";

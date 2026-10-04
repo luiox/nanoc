@@ -372,6 +372,72 @@ TEST(SemanticTest, NegativeDuplicateParameter) {
 }
 
 // ---------------------------------------------------------------------------
+// 负例：保留名 `_`（match 通配模式专用，规范 §2.3/§6.2）
+// ---------------------------------------------------------------------------
+
+// `_` 为 match 通配模式的保留拼写：一切声明位置（全局/局部变量、函数参数、
+// 函数名、struct 成员、typedef 名）出现名为 `_` 的声明均报语义错误；诊断
+// 位置取各声明的既有落点（类型关键字 / typedef 关键字 / 函数声明位置）
+TEST(SemanticTest, NegativeReservedUnderscoreDeclarations) {
+    const std::string message =
+      "'_' is reserved for the match wildcard pattern and cannot be used as a "
+      "declared name";
+
+    struct ReservedCase {
+        const char* name;
+        const char* source;
+        std::string diagnostic;
+    };
+    const ReservedCase cases[] = {
+        // 全局变量（声明位置 = 类型关键字 token）
+        { "global variable",
+          "int _ = 5;\nint main() { return 0; }\n",
+          "test.nc:1:1: error: " + message },
+        // 局部变量
+        { "local variable",
+          "int main() {\n    int _ = 5;\n    return 0;\n}\n",
+          "test.nc:2:5: error: " + message },
+        // 函数参数（沿用既有约定，位置 = 函数声明位置）
+        { "parameter",
+          "int f(int _) {\n    return 0;\n}\n",
+          "test.nc:1:1: error: " + message },
+        // 函数名
+        { "function name",
+          "int _() {\n    return 0;\n}\n",
+          "test.nc:1:1: error: " + message },
+        // struct 成员（声明位置 = 成员类型关键字 token）
+        { "struct member",
+          "struct S {\n    int _;\n};\nint main() { return 0; }\n",
+          "test.nc:2:5: error: " + message },
+        // typedef 别名（声明位置 = typedef 关键字 token）
+        { "typedef alias",
+          "typedef int _;\nint main() { return 0; }\n",
+          "test.nc:1:1: error: " + message },
+    };
+    for (const ReservedCase& testCase : cases) {
+        SCOPED_TRACE(testCase.name);
+        SemanticResult result = analyzeSource(testCase.source);
+        expectDiagnostics(result, { testCase.diagnostic });
+    }
+}
+
+// 正例对照：`_` 仅通配模式保留拼写——下划线前缀标识符照常可用，match 通配
+// 分支（解析器在模式入口拦截为 Wildcard，不经声明登记）不受保留名检查影响
+TEST(SemanticTest, PositiveUnderscorePrefixAndMatchWildcard) {
+    std::string source = R"(int main() {
+    int _x = 2;
+    int r = match (_x) {
+        1 => 10,
+        _ => 0,
+    };
+    return r + _x;
+}
+)";
+    SemanticResult result = analyzeSource(source);
+    expectDiagnostics(result, {});
+}
+
+// ---------------------------------------------------------------------------
 // 负例：类型不匹配（int→char 窄化禁止 / void 误用）
 // ---------------------------------------------------------------------------
 

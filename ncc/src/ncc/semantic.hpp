@@ -247,6 +247,11 @@ private:
     std::string hiddenGlobalHint(const std::string& name) const;
 
     // ---- 声明登记 ----
+    // 保留名检查（规范 §2.3/§6.2）：`_` 为 match 通配模式保留拼写，一切声明
+    // 位置（变量/参数/函数名/struct 成员/typedef 名）不得使用；命中报错并返回
+    // false。在登记入口统一调用；match 通配模式由解析器在模式解析入口先行拦截
+    // （`_` 即通配，不作绑定名），不受此检查影响
+    bool checkReservedUnderscore(const std::string& name, int line, int column);
     // 当前作用域登记变量；同名冲突（与变量或函数）报 redefinition 并返回 false
     bool declareVariable(const Symbol& symbol);
     bool declareFunction(const Symbol& symbol);
