@@ -1,4 +1,6 @@
-// Arithmetic Instructions Handlers
+// 寄存器算逻指令 handler：ADD/SUB/MUL/DIV/MOD（3 字节「opcode + reg + reg」，
+// 结果回写 dest）、NOT（2 字节按位取反）。DIV/MOD 除零/模零时指令不生效且
+// pc 不前进（规范 §9.3 UB，程序不得依赖）；有符号溢出同为 UB（§9.2）。
 #include "nvm/core.hpp"
 
 void

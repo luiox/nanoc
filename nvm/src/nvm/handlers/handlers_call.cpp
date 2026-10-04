@@ -1,4 +1,6 @@
-// Call and Return Instructions Handlers
+// 调用与返回指令 handler：CALL（内部直调）、CALLX（内部地址/宿主函数双
+// 语义，契约详见 executeCALLX 注释）、RET（弹返回地址续跑）。fastcall/cdecl
+// 调用约定只是导入表元数据与调用方清栈责任，不改变本层的压栈/跳转行为。
 #include "nvm/core.hpp"
 
 void

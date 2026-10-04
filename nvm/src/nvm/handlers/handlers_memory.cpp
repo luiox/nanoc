@@ -1,4 +1,8 @@
-// Memory Access Instructions Handlers
+// 访存指令 handler（统一内存 = m_stack，数据段与运行栈共用，见 core.hpp）：
+// LMM 立即数装入寄存器；LEA 装入地址常量（纯地址计算，不查越界）；
+// LOAD/STORE 寄存器间接读写；LOADA/STOREA 绝对地址读写；ST 绝对地址写。
+// 越界访问不做错误上报（读不回写寄存器、写被丢弃），各 handler 的边界
+// 判断细节以函数内实现为准。
 #include "nvm/core.hpp"
 
 void

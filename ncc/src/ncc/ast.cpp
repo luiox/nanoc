@@ -1,5 +1,8 @@
 #include "ncc/ast.hpp"
 
+// ASTNode::accept 的 visitor 分发实现（ast.hpp 节点定义的样板部分）。
+// 新增节点在 ast.hpp 追加区定义后，此处文件尾同步追加对应 accept。
+
 // Program节点的accept实现
 void Program::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 

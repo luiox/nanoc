@@ -47,6 +47,12 @@ struct NExportSymbol {
 // 返回值由 VM 写入 R0
 typedef int32_t (*NHostFunction)(int32_t * regs, int8_t * mem, int32_t memSize);
 
+// NanoC 虚拟机：装载 NCI v2.1 目标文件并解释执行。
+// - 内存模型：m_code 承载代码段；m_stack 统一承载数据段（载入
+//   m_stack[codeSize..]）与运行栈，栈向低地址生长（SP 初值 = 栈容量）
+// - 寄存器：R4=SP、R5=BP 以引用别名与 m_registers 共享存储（见成员注释）
+// - 宿主分发：CALLX 按地址查分发表；双语义与哨兵返回地址契约见
+//   handlers_call.cpp 与 start()
 class NVirtualMachine
 {
 public:

@@ -1,4 +1,6 @@
-// Miscellaneous Instructions Handlers
+// 杂项指令 handler：MOV（寄存器间拷贝）、CLR（寄存器清零）、NOP（空操作）。
+// 三者均不访存、不动 flags；非法寄存器号静默不生效（NOP 恒推进 pc），
+// 与其余 handler 的防御口径一致。
 #include "nvm/core.hpp"
 
 void

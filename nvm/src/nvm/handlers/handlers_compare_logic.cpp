@@ -1,4 +1,6 @@
-// Compare and Logic Instructions Handlers
+// 比较与位逻辑指令 handler：CMP/CMPI/TEST 置 flags（三态映射见
+// setCompareFlags），是条件跳转的唯一依据；AND/OR/XOR/SHL/SHR 只回写结果、
+// 不动 flags（不能直接作条件判定源）。
 #include "nvm/core.hpp"
 
 // 结果三态映射：=0 → Z，<0 → N，>0 → P；每次比较整体重置 flags

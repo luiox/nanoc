@@ -1,4 +1,7 @@
-// Immediate Arithmetic Instructions Handlers
+// 立即数算逻指令 handler：ADDI/SUBI/MULI/DIVI/MODI/ANDI/ORI/XORI（6 字节
+// 「opcode + reg + imm32」，结果回写寄存器）、SHLI/SHRI（3 字节，移位量为
+// imm8，不做掩码）、NEG（2 字节单寄存器取负）。DIVI/MODI 除零/模零语义与
+// 寄存器形态一致：指令不生效且 pc 不前进（规范 §9.3 UB，程序不得依赖）。
 #include "nvm/core.hpp"
 
 void

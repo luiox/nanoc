@@ -9,6 +9,11 @@
 #include <dlfcn.h>
 #endif
 
+// NVirtualMachine 实现：NCI v2.1 装载（格式嗅探 + 严格校验，见 loadV21）、
+// 宿主函数注册与动态链接（按名/按址两张表 + 签名包装器白名单）、主执行
+// 循环（opcode 分发表 + 栈底哨兵终止协议，见 start）。指令 handler 按
+// opcode 分组实现于 handlers/ 下，本文件只做装载/链接/循环骨架。
+
 namespace
 {
     // NCI v2.1 头字段偏移（规范 §2；头尺寸常量 NCI_V21_HEADER_SIZE 在 core.hpp）

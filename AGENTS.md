@@ -260,7 +260,6 @@ NanoC/
 │   └── src/nvm/
 │       ├── core.hpp/.cpp       # VM implementation（加载器/宿主分发/--host-lib 动态链接）
 │       ├── instructions.hpp    # Instruction set
-│       ├── string_helper.hpp   # Utility
 │       ├── handlers/           # Per-instruction handler methods
 │       └── main.cpp            # VM runner（--host-lib、--Xss）
 ├── nas/           # Assembler + linker
