@@ -363,3 +363,28 @@ TEST(CodegenE2ETest, TypedefTransparentMixedUse) {
     EXPECT_EQ(runProgram(source, "codegen_e2e_typedef.nci"), 111);
     std::remove("codegen_e2e_typedef.nci");
 }
+
+// i32 定宽类型名（与 int 同型）：混写程序全链路——i32 全局/i32 函数与参数/
+// 指针/数组/struct 成员/int 局部自由混用，同一归一化类型参与计算。
+// (3+4) + 7 = 14；0+1+2+3=6 → 14*10 + 6 = 146
+TEST(CodegenE2ETest, I32IntAliasMixing) {
+    std::string source = "i32 g = 7;\n"
+                         "struct Pair { i32 a; int b; };\n"
+                         "i32 add(i32 a, int b) { return a + b; }\n"
+                         "int main() {\n"
+                         "    i32 x = 3;\n"
+                         "    int y = 4;\n"
+                         "    i32 arr[2];\n"
+                         "    arr[0] = x;\n"
+                         "    arr[1] = y;\n"
+                         "    i32* p = &arr[0];\n"
+                         "    struct Pair pr;\n"
+                         "    pr.a = *p;\n"
+                         "    pr.b = g;\n"
+                         "    i32 s = 0;\n"
+                         "    for (i32 i = 0; i < 4; i = i + 1) { s = s + i; }\n"
+                         "    return add(pr.a + arr[1], pr.b) * 10 + s;\n"
+                         "}";
+    EXPECT_EQ(runProgram(source, "codegen_e2e_i32alias.nci"), 146);
+    std::remove("codegen_e2e_i32alias.nci");
+}

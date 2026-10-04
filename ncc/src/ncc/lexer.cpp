@@ -30,6 +30,8 @@ void Lexer::initKeywords() {
     // PRD R12 协程关键字（追加在表尾，不改既有映射）
     m_keywords["coro"] = NTokenKind::KEYWORD_CORO;
     m_keywords["yield"] = NTokenKind::KEYWORD_YIELD;
+    // i32：定宽 32 位整型规范名（追加在表尾，不改既有映射）
+    m_keywords["i32"] = NTokenKind::KEYWORD_I32;
 }
 
 char Lexer::currentChar() const {

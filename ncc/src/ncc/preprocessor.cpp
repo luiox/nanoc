@@ -13,7 +13,7 @@ namespace {
         static const std::set<std::string> keywords = {
             "int",     "char",   "void",   "if",       "else", "while",
             "for",     "return", "break",  "continue", "NULL", "struct",
-            "typedef", "import", "export", "extern",
+            "typedef", "import", "export", "extern",   "i32",
         };
         return keywords;
     }

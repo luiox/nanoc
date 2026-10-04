@@ -13,42 +13,42 @@
 TEST(LexerTest, Keywords) {
     std::string source = "int char void if else while for return break continue";
     Lexer lexer(source);
-    
+
     std::vector<Token> tokens = lexer.tokenize();
-    
+
     // 应该有10个关键字token + 1个EOF token
     ASSERT_EQ(tokens.size(), 11);
-    
+
     EXPECT_EQ(tokens[0].kind, NTokenKind::KEYWORD_INT);
     EXPECT_EQ(tokens[0].value, "int");
-    
+
     EXPECT_EQ(tokens[1].kind, NTokenKind::KEYWORD_CHAR);
     EXPECT_EQ(tokens[1].value, "char");
-    
+
     EXPECT_EQ(tokens[2].kind, NTokenKind::KEYWORD_VOID);
     EXPECT_EQ(tokens[2].value, "void");
-    
+
     EXPECT_EQ(tokens[3].kind, NTokenKind::KEYWORD_IF);
     EXPECT_EQ(tokens[3].value, "if");
-    
+
     EXPECT_EQ(tokens[4].kind, NTokenKind::KEYWORD_ELSE);
     EXPECT_EQ(tokens[4].value, "else");
-    
+
     EXPECT_EQ(tokens[5].kind, NTokenKind::KEYWORD_WHILE);
     EXPECT_EQ(tokens[5].value, "while");
-    
+
     EXPECT_EQ(tokens[6].kind, NTokenKind::KEYWORD_FOR);
     EXPECT_EQ(tokens[6].value, "for");
-    
+
     EXPECT_EQ(tokens[7].kind, NTokenKind::KEYWORD_RETURN);
     EXPECT_EQ(tokens[7].value, "return");
-    
+
     EXPECT_EQ(tokens[8].kind, NTokenKind::KEYWORD_BREAK);
     EXPECT_EQ(tokens[8].value, "break");
-    
+
     EXPECT_EQ(tokens[9].kind, NTokenKind::KEYWORD_CONTINUE);
     EXPECT_EQ(tokens[9].value, "continue");
-    
+
     EXPECT_EQ(tokens[10].kind, NTokenKind::TOKEN_EOF);
 }
 
@@ -56,17 +56,17 @@ TEST(LexerTest, Keywords) {
 TEST(LexerTest, Identifiers) {
     std::string source = "variable_name _private_var var123";
     Lexer lexer(source);
-    
+
     std::vector<Token> tokens = lexer.tokenize();
-    
+
     ASSERT_EQ(tokens.size(), 4); // 3个标识符 + 1个EOF
-    
+
     EXPECT_EQ(tokens[0].kind, NTokenKind::IDENTIFIER);
     EXPECT_EQ(tokens[0].value, "variable_name");
-    
+
     EXPECT_EQ(tokens[1].kind, NTokenKind::IDENTIFIER);
     EXPECT_EQ(tokens[1].value, "_private_var");
-    
+
     EXPECT_EQ(tokens[2].kind, NTokenKind::IDENTIFIER);
     EXPECT_EQ(tokens[2].value, "var123");
 }
@@ -75,17 +75,17 @@ TEST(LexerTest, Identifiers) {
 TEST(LexerTest, IntegerConstants) {
     std::string source = "0 123 456789";
     Lexer lexer(source);
-    
+
     std::vector<Token> tokens = lexer.tokenize();
-    
+
     ASSERT_EQ(tokens.size(), 4); // 3个整数 + 1个EOF
-    
+
     EXPECT_EQ(tokens[0].kind, NTokenKind::INTEGER_CONSTANT);
     EXPECT_EQ(tokens[0].value, "0");
-    
+
     EXPECT_EQ(tokens[1].kind, NTokenKind::INTEGER_CONSTANT);
     EXPECT_EQ(tokens[1].value, "123");
-    
+
     EXPECT_EQ(tokens[2].kind, NTokenKind::INTEGER_CONSTANT);
     EXPECT_EQ(tokens[2].value, "456789");
 }
@@ -94,17 +94,17 @@ TEST(LexerTest, IntegerConstants) {
 TEST(LexerTest, CharConstants) {
     std::string source = "'a' 'Z' '0'";
     Lexer lexer(source);
-    
+
     std::vector<Token> tokens = lexer.tokenize();
-    
+
     ASSERT_EQ(tokens.size(), 4); // 3个字符 + 1个EOF
-    
+
     EXPECT_EQ(tokens[0].kind, NTokenKind::CHAR_CONSTANT);
     EXPECT_EQ(tokens[0].value, "a");
-    
+
     EXPECT_EQ(tokens[1].kind, NTokenKind::CHAR_CONSTANT);
     EXPECT_EQ(tokens[1].value, "Z");
-    
+
     EXPECT_EQ(tokens[2].kind, NTokenKind::CHAR_CONSTANT);
     EXPECT_EQ(tokens[2].value, "0");
 }
@@ -113,11 +113,11 @@ TEST(LexerTest, CharConstants) {
 TEST(LexerTest, Operators) {
     std::string source = "+ - * / % = == != < <= > >= && || !";
     Lexer lexer(source);
-    
+
     std::vector<Token> tokens = lexer.tokenize();
-    
+
     ASSERT_EQ(tokens.size(), 16); // 15个运算符 + 1个EOF
-    
+
     EXPECT_EQ(tokens[0].kind, NTokenKind::OPERATOR_PLUS);
     EXPECT_EQ(tokens[1].kind, NTokenKind::OPERATOR_MINUS);
     EXPECT_EQ(tokens[2].kind, NTokenKind::OPERATOR_MULTIPLY);
@@ -139,11 +139,11 @@ TEST(LexerTest, Operators) {
 TEST(LexerTest, Delimiters) {
     std::string source = "; , ( ) { } [ ]";
     Lexer lexer(source);
-    
+
     std::vector<Token> tokens = lexer.tokenize();
-    
+
     ASSERT_EQ(tokens.size(), 9); // 8个分隔符 + 1个EOF
-    
+
     EXPECT_EQ(tokens[0].kind, NTokenKind::DELIMITER_SEMICOLON);
     EXPECT_EQ(tokens[1].kind, NTokenKind::DELIMITER_COMMA);
     EXPECT_EQ(tokens[2].kind, NTokenKind::DELIMITER_LPAREN);
@@ -158,12 +158,12 @@ TEST(LexerTest, Delimiters) {
 TEST(LexerTest, Comments) {
     std::string source = "// This is a comment\nint x; /* multi-line\ncomment */ int y;";
     Lexer lexer(source);
-    
+
     std::vector<Token> tokens = lexer.tokenize();
-    
+
     // 应该有：int, x, ;, int, y, ;, EOF
     ASSERT_EQ(tokens.size(), 7);
-    
+
     EXPECT_EQ(tokens[0].kind, NTokenKind::KEYWORD_INT);
     EXPECT_EQ(tokens[1].kind, NTokenKind::IDENTIFIER);
     EXPECT_EQ(tokens[1].value, "x");
@@ -179,9 +179,9 @@ TEST(LexerTest, Comments) {
 TEST(LexerTest, SimpleProgram) {
     std::string source = "int main() {\n    int a = 10;\n    return a;\n}";
     Lexer lexer(source);
-    
+
     std::vector<Token> tokens = lexer.tokenize();
-    
+
     // 验证token序列
     ASSERT_EQ(tokens[0].kind, NTokenKind::KEYWORD_INT);
     ASSERT_EQ(tokens[1].kind, NTokenKind::IDENTIFIER);
@@ -208,18 +208,18 @@ TEST(LexerTest, SimpleProgram) {
 TEST(LexerTest, LineAndColumn) {
     std::string source = "int\nx\ny";
     Lexer lexer(source);
-    
+
     Token token1 = lexer.nextToken();
     EXPECT_EQ(token1.kind, NTokenKind::KEYWORD_INT);
     EXPECT_EQ(token1.line, 1);
     EXPECT_EQ(token1.column, 1);
-    
+
     Token token2 = lexer.nextToken();
     EXPECT_EQ(token2.kind, NTokenKind::IDENTIFIER);
     EXPECT_EQ(token2.value, "x");
     EXPECT_EQ(token2.line, 2);
     EXPECT_EQ(token2.column, 1);
-    
+
     Token token3 = lexer.nextToken();
     EXPECT_EQ(token3.kind, NTokenKind::IDENTIFIER);
     EXPECT_EQ(token3.value, "y");
@@ -227,3 +227,43 @@ TEST(LexerTest, LineAndColumn) {
     EXPECT_EQ(token3.column, 1);
 }
 
+// i32 关键字：定宽 32 位整型规范名（与 int 同型，解析层归一化）
+TEST(LexerTest, I32Keyword) {
+    std::string source = "i32 x = 3;";
+    Lexer lexer(source);
+
+    std::vector<Token> tokens = lexer.tokenize();
+
+    ASSERT_EQ(tokens.size(), 6); // 5 个 token + 1 个 EOF
+
+    EXPECT_EQ(tokens[0].kind, NTokenKind::KEYWORD_I32);
+    EXPECT_EQ(tokens[0].value, "i32");
+
+    EXPECT_EQ(tokens[1].kind, NTokenKind::IDENTIFIER);
+    EXPECT_EQ(tokens[1].value, "x");
+
+    EXPECT_EQ(tokens[2].kind, NTokenKind::OPERATOR_ASSIGN);
+    EXPECT_EQ(tokens[3].kind, NTokenKind::INTEGER_CONSTANT);
+    EXPECT_EQ(tokens[3].value, "3");
+    EXPECT_EQ(tokens[4].kind, NTokenKind::DELIMITER_SEMICOLON);
+    EXPECT_EQ(tokens[5].kind, NTokenKind::TOKEN_EOF);
+}
+
+// i32 关键字边界：i321 / i32x 仍是标识符（最长匹配，不截断）
+TEST(LexerTest, I32KeywordBoundary) {
+    std::string source = "i321 i32x _i32";
+    Lexer lexer(source);
+
+    std::vector<Token> tokens = lexer.tokenize();
+
+    ASSERT_EQ(tokens.size(), 4); // 3 个标识符 + 1 个 EOF
+
+    EXPECT_EQ(tokens[0].kind, NTokenKind::IDENTIFIER);
+    EXPECT_EQ(tokens[0].value, "i321");
+
+    EXPECT_EQ(tokens[1].kind, NTokenKind::IDENTIFIER);
+    EXPECT_EQ(tokens[1].value, "i32x");
+
+    EXPECT_EQ(tokens[2].kind, NTokenKind::IDENTIFIER);
+    EXPECT_EQ(tokens[2].value, "_i32");
+}
