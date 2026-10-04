@@ -222,8 +222,10 @@ std::unique_ptr<Decl> Parser::parseDeclaration(bool isExported, bool isCoro) {
     }
 
     // 类型开头：builtin 关键字、struct、typedef 别名；头文件模式（PRD R9）
-    // 另接受 C 限定符/修饰符开头的声明（const unsigned int 等，语义忽略）
+    // 另接受 C 限定符/修饰符开头的声明（const unsigned int 等，语义忽略）。
+    // i32 与 int 同型，走同一分支
     if (currentToken().kind == NTokenKind::KEYWORD_INT
+        || currentToken().kind == NTokenKind::KEYWORD_I32
         || currentToken().kind == NTokenKind::KEYWORD_CHAR
         || currentToken().kind == NTokenKind::KEYWORD_VOID
         || currentToken().kind == NTokenKind::KEYWORD_STRUCT
@@ -327,9 +329,13 @@ std::string Parser::parseTypePrefix(bool& isStructTag, int& line, int& column) {
     }
 
     if (currentToken().kind == NTokenKind::KEYWORD_INT
+        || currentToken().kind == NTokenKind::KEYWORD_I32
         || currentToken().kind == NTokenKind::KEYWORD_CHAR
         || currentToken().kind == NTokenKind::KEYWORD_VOID) {
-        std::string type = currentToken().value;
+        // i32 是 int 的定宽规范名：解析层即归一化为 "int"，AST/语义/IR/后端
+        // 均只见 "int"（int 退役为别名时后端零改动）
+        std::string type =
+          (currentToken().kind == NTokenKind::KEYWORD_I32) ? "int" : currentToken().value;
         advance();
         return type;
     }
@@ -373,6 +379,7 @@ bool Parser::skipHeaderQualifiers() {
 bool Parser::isTypeStart() const {
     switch (currentToken().kind) {
     case NTokenKind::KEYWORD_INT:
+    case NTokenKind::KEYWORD_I32:
     case NTokenKind::KEYWORD_CHAR:
     case NTokenKind::KEYWORD_VOID:
     case NTokenKind::KEYWORD_STRUCT:
@@ -519,9 +526,12 @@ std::unique_ptr<Decl> Parser::parseTypedefDeclaration() {
             error("Expected struct tag after 'struct'");
         }
     } else if (currentToken().kind == NTokenKind::KEYWORD_INT
+               || currentToken().kind == NTokenKind::KEYWORD_I32
                || currentToken().kind == NTokenKind::KEYWORD_CHAR
                || currentToken().kind == NTokenKind::KEYWORD_VOID) {
-        decl->baseType = currentToken().value;
+        // `typedef i32 MyInt;`：i32 归一化为 "int"（与变量/函数声明一致）
+        decl->baseType =
+          (currentToken().kind == NTokenKind::KEYWORD_I32) ? "int" : currentToken().value;
         advance();
     } else {
         error("Expected type after 'typedef'");
@@ -1005,6 +1015,7 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     case NTokenKind::KEYWORD_CONTINUE:
         return parseContinueStatement();
     case NTokenKind::KEYWORD_INT:
+    case NTokenKind::KEYWORD_I32:
     case NTokenKind::KEYWORD_CHAR:
     case NTokenKind::KEYWORD_VOID:
         // 变量声明作为语句处理
