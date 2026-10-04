@@ -197,6 +197,7 @@ doc/             设计文档与规范
 
 | 文档 | 内容 |
 |------|------|
+| [doc/Language Reference.md](doc/Language%20Reference.md) | NanoC 语言规范 v1.0（词法/文法/类型/语义、defer/match/coro 扩展、与 C 互操作、UB 清单；以实现为准） |
 | [doc/Bytecode Format Specification v2.1.md](doc/Bytecode%20Format%20Specification%20v2.1.md) | NCI v2.1 字节码格式权威规范（指令集、文件布局、链接语义、调用约定） |
 | [doc/PRD-多后端编译与语言特性.md](doc/PRD-多后端编译与语言特性.md) | 产品路线图（R0-R14，多后端与语言特性；含里程碑进度对账） |
 | [doc/开发计划 NCIv2.1.md](doc/开发计划%20NCIv2.1.md) | NCI v2.1 基座五阶段计划（已完成；后续演进以 PRD 为准） |
