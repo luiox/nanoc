@@ -1,4 +1,7 @@
-// Stack and Control Flow Instructions Handlers
+// 栈操作、栈帧与跳转指令 handler：PUSH/PUSHI/POP（栈向低地址生长，槽宽
+// STACK_SLOT_SIZE）；ENTER/LEAVE 建/还栈帧（压 BP、预留局部区，与 codegen
+// 的函数序言/尾声一一配对）；JMP 与条件跳转 JZ/JNZ/JN/JP（按 flags 单一
+// 置位位判定，flags 仅由 CMP/CMPI/TEST 设置）。
 #include "nvm/core.hpp"
 
 void

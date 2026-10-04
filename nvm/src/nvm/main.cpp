@@ -6,6 +6,11 @@
 #include <string>
 #include <vector>
 
+// nvm CLI 入口：装载并执行 NCI v2.1 目标文件。
+// 选项：--Xss=<n>[b|k|m]（栈容量）、--host-lib <path>（动态导入宿主库，
+// 可多次，按序解析）。进程退出码 = main 返回值 R0 & 0xFF（#62，与 C 后端
+// 原生 exe 口径一致，差分矩阵同一映射）。
+
 namespace
 {
     // --Xss 容量单位进率

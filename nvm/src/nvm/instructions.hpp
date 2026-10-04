@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <cstring>
 
+// NCI v2.1 执行侧共享定义：flags 位、寄存器编码/角色、指令长度表、取指与
+// 统一内存读写辅助（core.cpp 与 handlers/ 共用）。
+
 // NCI v2.1 opcode 权威定义在 nas/src/nas/instruction.hpp（本头文件曾重复
 // 定义 NOpcode，nvm 侧零引用；集成期删除重复，FLAG_*/NRegister 保留）
 
