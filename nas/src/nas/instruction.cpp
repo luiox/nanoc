@@ -3,6 +3,12 @@
 #include <cctype>
 #include <map>
 
+// Assembler 实现：.nas 文本 → NCI v2.1 目标文件（两遍扫描，见 assemble）。
+// 第一遍逐行解析（parseLine 编码指令；标号延迟绑定到下一段内容；extern/
+// export 记入符号表；db/dw/dd 切数据段），第二遍按标号表/导入表回填代码
+// 段 IMM32 与 dd 标号引用，重算 entryPoint（main 导出优先）。语法助记符
+// 与操作数形态的权威定义在 instruction.hpp（NOpcode/指令长度表）。
+
 // Trim whitespace
 static void
 trim(std::string & s)

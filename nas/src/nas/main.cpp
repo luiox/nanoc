@@ -6,6 +6,11 @@
 #include <string>
 #include <vector>
 
+// nas CLI 入口，两种模式：
+// - 汇编模式：nas <in.nas> [out.nci]（缺省输出同名 .nci），Assembler::assemble
+// - 链接模式：nas -r <in1.nci> ... -o <out.nci>（PRD R7），Linker::linkFiles
+// 诊断走 stderr；错误退出码 1（与 nvm 的程序退出码口径互不影响）
+
 namespace
 {
     int
