@@ -5,6 +5,12 @@
 #include <string>
 #include <vector>
 
+// AST 数据模型（节点定义 + ASTVisitor 接口）：Parser 产出、semantic/ir
+// 消费。仍保留 sourceFile/isExported 等链接信息（IR 不建模，多文件标号
+// mangle 依赖它们，见 codegen.hpp 的 LinkageEntry 注释）。
+// 追加式纪律：新节点类型/visit 方法只在文件尾部追加区扩展，不改既有
+// 枚举值与接口顺序（并行分支合并冲突最小化）。
+
 // AST节点类型枚举
 enum class ASTNodeType {
     // 程序

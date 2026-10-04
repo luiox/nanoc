@@ -3,6 +3,12 @@
 #include <cctype>
 #include <stdexcept>
 
+// NAS 后端发射器实现（目标机器/struct/调用约定见 codegen.hpp 类注释）：
+// ir::Module → NCI v2.1 汇编文本。
+// 发射组织：先登记 struct 布局与函数/全局符号表（前向引用可用），第二遍
+// 逐函数发射函数体、末尾发射数据段（全局定义与初始化）；帧布局（局部槽/
+// 栈参/struct 临时区）在函数序言 enter 处定格，临时区越界抛异常防御。
+
 namespace {
 
     // 规范类型名后缀工具：基型（int/char/void/struct Tag）+ 指针星号 + 数组方括号

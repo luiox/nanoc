@@ -2,6 +2,13 @@
 #include <sstream>
 #include <stdexcept>
 
+// 递归下降解析器实现（接口/文法约定见 parser.hpp）：token 流 → AST。
+// 语句/声明按首 token 分发，typedef 别名在构造期对 token 预扫描收集（分发
+// 消歧的前置依赖）；i32（int 的定宽规范名）在解析层归一化为 int，AST 及
+// 之后各层不再出现。import/export/extern 与 R9 头文件模式（C 声明子集）
+// 的语法收口在本层；defer/match/yield（PRD R10-R12）按追加式纪律挂在
+// 既有分发链尾部。
+
 namespace {
 
     // R9 头文件模式接受的 C 限定符/修饰符（语义忽略——决策记录：

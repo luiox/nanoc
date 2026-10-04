@@ -5,6 +5,11 @@
 #include <sstream>
 #include <stdexcept>
 
+// R9 行级预处理实现（支持/不做与全部决策记录见 preprocessor.hpp 类注释）：
+// 引号 include 递归展开、guard 三行剥离与对象宏识别、enum 原位改写、
+// 固定宽度类型/bool 预置常量表。产物与源文件行对齐（指令行清空），
+// 解析诊断的行列与原文件一致。
+
 namespace {
 
     // NanoC 语言关键字（R9 决策：#define 宏名不得覆盖语言关键字——文本替换
