@@ -219,4 +219,4 @@ doc/             设计文档与规范
 - ✅ 语言特性：`defer`（作用域退出逆序执行）、`match`（常量/区间/多值/守卫/通配）、`coro/yield`（无栈协程，IR 状态机变换，三后端一致）、`i32`（定宽 32 位整型规范名，`int` 为兼容别名）
 - ✅ `#include` C 头文件声明子集（guard/对象宏/原型/struct/typedef/修饰符）
 - ✅ M6 协程 coro/yield（PRD R12）：IR 状态机变换，`examples/coro_iterator.nc` 三后端一致
-- ✅ 测试 505 项全绿（含黄金 e2e、链接器、宿主库、协程、三后端差分矩阵）；GitHub Actions CI（windows-latest + LLVM 差分列）
+- ✅ 测试 509 项全绿（含黄金 e2e、链接器、宿主库、协程、三后端差分矩阵）；GitHub Actions CI（windows-latest + LLVM 差分列）
