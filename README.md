@@ -16,7 +16,7 @@ NanoC 是一个类似 C 语言子集的编译器 + 虚拟机项目，用于学�
 |------|------|
 | **ncc** | Nano C 编译器：词法/语法分析 → AST → 语义分析（作用域/类型检查）→ IR（`--dump-ir` 可查看）→ 后端发射；支持多文件模块（`import`/`export`）、`extern` 声明、`#include` C 头文件声明子集、`defer`/`match` 语言特性 |
 | **nas** | 汇编器 + 链接器：汇编为 NCI v2.1 二进制（32 字节头 + 代码段 + 数据段 + 导入/导出表）；`nas -r` 多目标链接（段合并/重定位/符号解析） |
-| **nvm** | 虚拟机：48 条极简指令，无系统调用；CALLX 调用宿主 C 函数（静态注册、`--host-lib` 动态链接、链接器内部解析） |
+| **nvm** | 虚拟机：48 条极简指令，无系统调用；CALLX 调用宿主 C 函数（静态注册、`--host-lib` 动态链接、链接器内部解析）；进程退出码 = `main` 返回值 R0 & 0xFF（与原生 exe 口径一致） |
 | **C 后端** | `ncc --emit=c` 产出可读 C（`ir::Module` → C），交给系统 C 工具链编译为原生 exe，兼作差分测试 oracle |
 | **LLVM 后端** | `ncc --emit=llvm|obj|exe`：`ir::Module` → 文本 .ll → llc（+ lld-link/clang 链接）产出 .obj / 原生 exe（工具链探测：`NANOC_LLVM_DIR` > PATH 上的 `llc`） |
 
@@ -199,7 +199,7 @@ doc/             设计文档与规范
 |------|------|
 | [doc/Language Reference.md](doc/Language%20Reference.md) | NanoC 语言规范 v1.0（词法/文法/类型/语义、defer/match/coro 扩展、与 C 互操作、UB 清单；以实现为准） |
 | [doc/Bytecode Format Specification v2.1.md](doc/Bytecode%20Format%20Specification%20v2.1.md) | NCI v2.1 字节码格式权威规范（指令集、文件布局、链接语义、调用约定） |
-| [doc/PRD-多后端编译与语言特性.md](doc/PRD-多后端编译与语言特性.md) | 产品路线图（R0-R14，多后端与语言特性；含里程碑进度对账） |
+| [doc/PRD-多后端编译与语言特性.md](doc/PRD-多后端编译与语言特性.md) | 产品路线图（R0-R15，多后端与语言特性；含里程碑进度对账） |
 | [doc/开发计划 NCIv2.1.md](doc/开发计划%20NCIv2.1.md) | NCI v2.1 基座五阶段计划（已完成；后续演进以 PRD 为准） |
 | [doc/xmake-rule.md](doc/xmake-rule.md) | rule("nanoc") 接入指南与已知边界 |
 | [doc/xmake-toolchain.md](doc/xmake-toolchain.md) | toolchain("nanoc") 接入指南、与 rule 的选择指南 |
@@ -211,12 +211,12 @@ doc/             设计文档与规范
 - ✅ NCI v2.1 指令集（48 条）与 VM 执行层、栈帧管理、栈底哨兵
 - ✅ nas 汇编器 v2.1 完整目标文件 + 链接器（`nas -r`：段合并/重定位/符号解析）
 - ✅ VM 加载器（严格校验、导入/导出表、数据段载入、`--host-lib` 动态链接与签名包装器）
-- ✅ ncc 前端：语义分析、类型系统（字符串/指针/数组/struct/typedef）、IR、多文件 import/export
+- ✅ ncc 前端：语义分析、类型系统（int=i32 32 位补码、char=8 位，见《Language Reference》§类型系统；字符串/指针/数组/struct/typedef）、IR、多文件 import/export
 - ✅ C 后端 `--emit=c`（原生 exe，差分 oracle）；extern 声明（C 后端真调 msvcrt，VM 侧 cdecl）
 - ✅ LLVM 后端 `--emit=llvm|obj|exe`（三后端差分矩阵 vm/c/llvm）
 - ✅ 独立编译 + 链接：`nas -r`、ncc `loadStandalone`、`ncc-separate` 驱动
 - ✅ xmake 两种接入：`rule("nanoc")`（hello_project）+ `toolchain("nanoc")`（toolchain_project）
-- ✅ 语言特性：`defer`（作用域退出逆序执行）、`match`（常量/区间/多值/守卫/通配）、`coro/yield`（无栈协程，IR 状态机变换，三后端一致）
+- ✅ 语言特性：`defer`（作用域退出逆序执行）、`match`（常量/区间/多值/守卫/通配）、`coro/yield`（无栈协程，IR 状态机变换，三后端一致）、`i32`（定宽 32 位整型规范名，`int` 为兼容别名）
 - ✅ `#include` C 头文件声明子集（guard/对象宏/原型/struct/typedef/修饰符）
 - ✅ M6 协程 coro/yield（PRD R12）：IR 状态机变换，`examples/coro_iterator.nc` 三后端一致
-- ✅ 测试 500 项全绿（含黄金 e2e、链接器、宿主库、协程、三后端差分矩阵）；GitHub Actions CI（windows-latest + LLVM 差分列）
+- ✅ 测试 505 项全绿（含黄金 e2e、链接器、宿主库、协程、三后端差分矩阵）；GitHub Actions CI（windows-latest + LLVM 差分列）
