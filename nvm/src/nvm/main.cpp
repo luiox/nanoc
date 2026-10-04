@@ -86,6 +86,9 @@ main(int argc, char * argv[])
     for (const auto & lib : hostLibs)
         printf("Host library: %s\n", lib.c_str());
     printf("\n");
+    // banner 先于程序输出落盘：宿主库（如 msvcrt 的 puts）不经 stdout 缓冲，
+    // 不 flush 会排到程序输出之后
+    fflush(stdout);
 
     // 创建虚拟机实例
     NVirtualMachine vm(stackSize);
@@ -113,5 +116,8 @@ main(int argc, char * argv[])
         return 1;
     }
 
-    return 0;
+    // 进程退出码 = main 返回值 R0 & 0xFF，与 C 后端 int main 返回值的
+    // 退出语义一致（差分矩阵同一映射）；错误路径的 1 与程序正常返回 1
+    // 天然不可区分，与原生可执行文件行为相同
+    return vm.getRegister(0) & 0xFF;
 }
